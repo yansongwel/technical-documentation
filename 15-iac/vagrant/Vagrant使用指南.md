@@ -20,6 +20,7 @@
 12. [快照管理](#12-快照管理)
 13. [常见问题排查](#13-常见问题排查)
 14. [最佳实践](#14-最佳实践)
+15. [存储位置配置（防止占用 C 盘）](#15-存储位置配置防止占用-c-盘)
 
 ---
 
@@ -81,6 +82,69 @@ vagrant plugin list
 ```
 
 > ⚠️ **重要**：每个项目需在独立目录中放置一个名为 `Vagrantfile`（无扩展名）的文件才能正常使用 `vagrant up`。建议复制示例文件重命名为 `Vagrantfile` 后使用。
+
+### 2.5 控制存储位置（防止占用 C 盘）⭐
+
+> ⚠️ **强烈建议在首次使用前完成此配置**，Vagrant Box 和 VirtualBox 虚拟机默认都写入 C 盘，一套 5 节点集群轻松占用 100GB+ 的 C 盘空间。
+
+#### Vagrant Box 存储位置
+
+Vagrant Box 默认存储路径：`C:\Users\<用户名>\.vagrant.d\`
+
+**修改方法：设置 `VAGRANT_HOME` 环境变量**
+
+```powershell
+# 以管理员模式打开 PowerShell，永久设置系统环境变量
+[System.Environment]::SetEnvironmentVariable("VAGRANT_HOME", "D:\VM\vagrant.d", "Machine")
+
+# 验证设置是否生效（需重开 PowerShell 窗口）
+echo $env:VAGRANT_HOME
+# 预期输出：D:\VM\vagrant.d
+```
+
+或通过 GUI 设置：**系统属性 → 高级 → 环境变量 → 系统变量 → 新建**
+
+| 变量名 | 变量值 |
+|--------|--------|
+| `VAGRANT_HOME` | `D:\VM\vagrant.d` |
+
+> ⚠️ 设置后需要**关闭并重新打开 PowerShell 窗口**才能生效。如果之前已有 Box，需将 `C:\Users\<用户名>\.vagrant.d\boxes\` 目录整体移动到新路径。
+
+#### VirtualBox 虚拟机磁盘存储位置
+
+VirtualBox 默认虚拟机路径：`C:\Users\<用户名>\VirtualBox VMs\`
+
+**修改方法：VBoxManage 命令（推荐）**
+
+```powershell
+# 修改 VirtualBox 默认虚拟机存储目录（需要 VirtualBox 已安装）
+"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" setproperty machinefolder "D:\VM\VirtualBox VMs"
+
+# 验证修改结果
+"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list systemproperties | findstr "Default machine folder"
+# 预期输出：Default machine folder:          D:\VM\VirtualBox VMs
+```
+
+或通过 GUI 设置：**VirtualBox → 文件 → 偏好设置 → 常规 → 默认虚拟机文件夹**
+
+#### 推荐 D 盘目录规划
+
+```
+D:\VM\
+├── vagrant.d\              # ← VAGRANT_HOME，Box 镜像解压后存放处（几GB~几十GB/个）
+│   └── boxes\
+│       ├── rocky9\
+│       └── ubuntu24\
+├── box\                    # ← 原始 .box 安装包（可选保留，用于重新 add）
+│   ├── generic-rocky9.box
+│   └── ubuntu-24.04-x86_64.box
+└── VirtualBox VMs\         # ← 虚拟机运行时磁盘 .vdi 存放处（每台虚拟机 40GB+）
+    ├── k8s-node1\
+    ├── k8s-node2\
+    └── ...
+```
+
+> 💡 完成上述配置后，执行 `vagrant up` 产生的所有数据将全部写入 D 盘。
 
 ---
 
@@ -605,12 +669,41 @@ root_password = ENV.fetch("VM_ROOT_PASSWORD", "Chang3Me!")
 ### 14.3 节省磁盘空间
 
 ```powershell
-# 压缩 VirtualBox 虚拟磁盘（先在虚拟机内零填充）
-# 虚拟机内执行：
-# dd if=/dev/zero of=/EMPTY bs=1M; rm -f /EMPTY
+# 1. 压缩 VirtualBox 虚拟磁盘（先在 Linux 虚拟机内零填充，再在宿主机压缩）
+# 步骤一：虚拟机内执行（清空空闲块）
+# dd if=/dev/zero of=/EMPTY bs=1M; rm -f /EMPTY; sync
 
-# 在宿主机执行压缩
-# VBoxManage modifymedium disk "D:\VM\disks\k8s-node1.vdi" --compact
+# 步骤二：关闭虚拟机后在宿主机执行（压缩 .vdi 文件）
+# "C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" modifymedium disk "D:\VM\VirtualBox VMs\k8s-node1\k8s-node1.vdi" --compact
+
+# 2. 删除不再需要的 Box（Box 文件本身也占较大空间）
+vagrant box remove rocky9
+
+# 3. 修剪旧版本 Box（保留最新版，删除历史版本）
+vagrant box prune
+```
+
+> ⚠️ 防止 C 盘爆满的根本方案请参考 [第 2.5 节](#25-控制存储位置防止占用-c-盘)。
+
+---
+
+## 15. 存储位置配置（防止占用 C 盘）
+
+> 本节内容已在 [2.5 节](#25-控制存储位置防止占用-c-盘) 中详细说明，请参考该节进行配置。
+
+**快速操作汇总**：
+
+```powershell
+# ─── 步骤一：迁移 Vagrant Box 存储（管理员 PowerShell）───────────────────
+[System.Environment]::SetEnvironmentVariable("VAGRANT_HOME", "D:\VM\vagrant.d", "Machine")
+
+# ─── 步骤二：迁移 VirtualBox VM 存储目录 ────────────────────────────────
+"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" setproperty machinefolder "D:\VM\VirtualBox VMs"
+
+# ─── 步骤三：验证 ─────────────────────────────────────────────────────────
+# 重开 PowerShell 后执行
+echo $env:VAGRANT_HOME
+"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe" list systemproperties | findstr "Default machine folder"
 ```
 
 ---
