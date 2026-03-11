@@ -360,16 +360,21 @@ sealos reset
 
 ### 7.2 备份与恢复
 
-Sealos 支持对集群 Etcd 数据进行快照备份，这是生产环境必须掌握的技能。
+生产环境建议定期对 Etcd 做快照备份。
 
 ```bash
-# ── 创建备份 ───────────────────────────────
-# 创建快照备份
-sealos etcd save --name snapshot-$(date +%F)
+# 创建快照备份（kubeadm 静态 etcd）
+mkdir -p /backup
+SNAP=/backup/etcd-snapshot-$(date +%F-%H%M).db
+ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
+  --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+  snapshot save "$SNAP"
 
-# ── 恢复备份 ───────────────────────────────
-# 恢复快照（需在灾难恢复模式下使用，会有服务中断）
-sealos etcd restore --name snapshot-2026-03-09
+# 验证快照可用
+ETCDCTL_API=3 etcdctl snapshot status "$SNAP"
 ```
 
 ### 7.3 集群扩缩容
@@ -470,4 +475,3 @@ health check for peer ... failed
 - [Sealos 官方文档](https://sealos.io/zh-Hans/docs/self-hosting/lifecycle-management/quick-start/deploy-kubernetes)
 - [Kubernetes 官方文档](https://kubernetes.io/zh-cn/docs/home/)
 - [Calico 网络插件配置](https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/onpremises)
-

@@ -1,8 +1,14 @@
+***
 
+title: Sealos生产级部署与运维指南
+author: devinyan
+updated: 2026-03-11
+version: v1
+-----------
 
 [TOC]
 
----
+***
 
 # Sealos生产级部署与运维指南
 
@@ -25,15 +31,15 @@
 
 ### 1.2 适用场景
 
-| 场景 | 说明 |
-|------|------|
-| **企业应用托管** | 中小型企业的业务系统、OA、ERP 等应用托管 |
-| **开发测试环境** | 快速搭建开发、测试、预发布环境 |
-| **微服务架构** | 支持容器化的微服务部署与管理 |
-| **数据库服务** | 提供高可用的托管数据库服务（MySQL、Redis、PostgreSQL 等） |
-| **CI/CD 流水线** | 与 GitLab、Gitea 等 CI/CD 工具集成 |
-| **私有云平台** | 企业内部私有云平台建设 |
-| **教育与培训**： | 云原生技术教学与实践环境 |
+| 场景            | 说明                                      |
+| ------------- | --------------------------------------- |
+| **企业应用托管**    | 中小型企业的业务系统、OA、ERP 等应用托管                 |
+| **开发测试环境**    | 快速搭建开发、测试、预发布环境                         |
+| **微服务架构**     | 支持容器化的微服务部署与管理                          |
+| **数据库服务**     | 提供高可用的托管数据库服务（MySQL、Redis、PostgreSQL 等） |
+| **CI/CD 流水线** | 与 GitLab、Gitea 等 CI/CD 工具集成             |
+| **私有云平台**     | 企业内部私有云平台建设                             |
+| **教育与培训**：    | 云原生技术教学与实践环境                            |
 
 ### 1.3 架构原理图
 
@@ -93,38 +99,50 @@ graph TB
 - **数据存储层**：存储用户、计量和账户数据
 - **运行时环境**：实际运行用户应用容器
 
----
+### 1.4 版本说明
+
+- **Sealos CLI**：v5.1.1+（生产环境优先使用 v5 新格式 Clusterfile）
+- **Kubernetes**：v1.28.x（成熟稳定，生态适配充分）
+- **容器运行时**：Containerd（由 `labring/kubernetes:*` 集群镜像内置安装）
+- **CNI**：Calico v3.26.x（生产常用，排障经验丰富）
+- **Helm**：v3.12.x（与应用交付强相关）
+- **操作系统**：Rocky Linux 9（主线）；Ubuntu 22.04 仅在差异处补充
+
+***
 
 ## 2. 版本选择指南
 
 ### 2.1 版本对应关系表
 
-| Sealos 版本 | Kubernetes 版本 | 发布日期 | 状态 | 推荐场景 |
-|-------------|-----------------|----------|------|----------|
-| **5.0.x** | 1.28.x - 1.29.x | 2024-Q4 | 稳定版 | 生产环境（推荐） |
-| **4.3.x** | 1.26.x - 1.27.x | 2024-Q2 | 维护模式 | 现有生产环境 |
-| **4.2.x** | 1.25.x | 2023-Q4 | 即将 EOL | 建议升级 |
-| **4.1.x** | 1.24.x | 2023-Q2 | 已 EOL | 不建议使用 |
+| Sealos 版本 | Kubernetes 版本   | 发布日期    | 状态     | 推荐场景     |
+| --------- | --------------- | ------- | ------ | -------- |
+| **5.0.x** | 1.28.x - 1.29.x | 2024-Q4 | 稳定版    | 生产环境（推荐） |
+| **4.3.x** | 1.26.x - 1.27.x | 2024-Q2 | 维护模式   | 现有生产环境   |
+| **4.2.x** | 1.25.x          | 2023-Q4 | 即将 EOL | 建议升级     |
+| **4.1.x** | 1.24.x          | 2023-Q2 | 已 EOL  | 不建议使用    |
 
 ### 2.2 版本决策建议
 
 **选择 Sealos 5.0.x 系列的情况：**
+
 - 新建生产环境部署
 - 需要最新的 Kubernetes 特性支持
 - 对安全性有较高要求
 - 计划长期维护的集群
 
 **选择 Sealos 4.3.x 系列的情况：**
+
 - 现有集群稳定运行，暂无升级需求
 - 需要与特定版本的 Kubernetes 工具链兼容
 - 团队对特定版本有运维经验
 
 **版本升级注意事项：**
+
 - 小版本升级（如 4.3.0 → 4.3.5）：可直接升级，风险较低
 - 大版本升级（如 4.x → 5.0）：建议先在测试环境验证，制定详细的回滚方案
 - 升级前务必备份 etcd 数据和重要配置文件
 
----
+***
 
 ## 3. 生产环境规划（高可用架构）
 
@@ -132,38 +150,29 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph "负载均衡层 (HAProxy / Keepalived)"
-        LB1[LB-01: 192.168.1.10<br/>VIP: 192.168.1.9]
-        LB2[LB-02: 192.168.1.11<br/>VIP: 192.168.1.9]
-        LB1 <--> LB2
-    end
-
-    subgraph "Kubernetes Master 节点 (3节点)"
-        M1[Master-01<br/>192.168.1.20<br/>etcd, API Server<br/>Controller, Scheduler]
-        M2[Master-02<br/>192.168.1.21<br/>etcd, API Server<br/>Controller, Scheduler]
-        M3[Master-03<br/>192.168.1.22<br/>etcd, API Server<br/>Controller, Scheduler]
+    subgraph "Kubernetes 控制平面 (3 Master + etcd)"
+        VIP[apiserver.cluster.local:6443<br/>Sealos lvscare 提供<br/>Worker 上通常解析为 10.103.97.2]
+        M1[Master-01<br/>192.168.33.100<br/>etcd, API Server<br/>Controller, Scheduler]
+        M2[Master-02<br/>192.168.33.101<br/>etcd, API Server<br/>Controller, Scheduler]
+        M3[Master-03<br/>192.168.33.102<br/>etcd, API Server<br/>Controller, Scheduler]
         M1 <--> M2
         M2 <--> M3
         M3 <--> M1
+        VIP --> M1
+        VIP --> M2
+        VIP --> M3
     end
 
     subgraph "Kubernetes Worker 节点 (3+节点)"
-        W1[Worker-01<br/>192.168.1.30<br/>Runtime, Kubelet<br/>Proxy, CNI]
-        W2[Worker-02<br/>192.168.1.31<br/>Runtime, Kubelet<br/>Proxy, CNI]
-        W3[Worker-03<br/>192.168.1.32<br/>Runtime, Kubelet<br/>Proxy, CNI]
+        W1[Worker-01<br/>192.168.33.103<br/>Runtime, Kubelet<br/>Proxy, CNI]
+        W2[Worker-02<br/>192.168.33.104<br/>Runtime, Kubelet<br/>Proxy, CNI]
+        W3[Worker-03<br/>192.168.33.105<br/>Runtime, Kubelet<br/>Proxy, CNI]
     end
 
     subgraph "存储层"
         S1[(分布式存储<br/>Ceph/GlusterFS)]
         S2[(NFS 存储)]
     end
-
-    LB1 --> M1
-    LB1 --> M2
-    LB1 --> M3
-    LB2 --> M1
-    LB2 --> M2
-    LB2 --> M3
 
     M1 --> W1
     M2 --> W2
@@ -173,11 +182,9 @@ graph TB
     W2 --> S1
     W3 --> S2
 
-    User[用户/客户端] --> LB1
-    User --> LB2
+    User[用户/客户端] --> VIP
 
-    style LB1 fill:#3498DB,stroke:#2980B9,color:#fff
-    style LB2 fill:#3498DB,stroke:#2980B9,color:#fff
+    style VIP fill:#3498DB,stroke:#2980B9,color:#fff
     style M1 fill:#E74C3C,stroke:#C0392B,color:#fff
     style M2 fill:#E74C3C,stroke:#C0392B,color:#fff
     style M3 fill:#E74C3C,stroke:#C0392B,color:#fff
@@ -192,77 +199,65 @@ graph TB
 
 #### Master 节点配置（3 节点）
 
-| 配置项 | 最低配置 | 推荐配置 | 说明 |
-|--------|----------|----------|------|
-| **CPU** | 4 Core | 8 Core+ | etcd 和 API Server 消耗 CPU |
-| **内存** | 8 GB | 16 GB+ | etcd 需要充足内存 |
-| **磁盘** | 100 GB SSD | 200 GB NVMe SSD | 系统盘 + etcd 数据 |
-| **网络** | 1 Gbps | 10 Gbps | 节点间通信带宽 |
-| **操作系统** | Rocky Linux 9 / Ubuntu 22.04 | Rocky Linux 9 / Ubuntu 22.04 | 保持版本一致 |
-| **角色** | etcd + API Server + Controller + Scheduler | etcd + API Server + Controller + Scheduler | 全功能控制平面 |
+| 配置项      | 最低配置                                       | 推荐配置                                       | 说明                       |
+| -------- | ------------------------------------------ | ------------------------------------------ | ------------------------ |
+| **CPU**  | 4 Core                                     | 8 Core+                                    | etcd 和 API Server 消耗 CPU |
+| **内存**   | 8 GB                                       | 16 GB+                                     | etcd 需要充足内存              |
+| **磁盘**   | 100 GB SSD                                 | 200 GB NVMe SSD                            | 系统盘 + etcd 数据            |
+| **网络**   | 1 Gbps                                     | 10 Gbps                                    | 节点间通信带宽                  |
+| **操作系统** | Rocky Linux 9 / Ubuntu 22.04               | Rocky Linux 9 / Ubuntu 22.04               | 保持版本一致                   |
+| **角色**   | etcd + API Server + Controller + Scheduler | etcd + API Server + Controller + Scheduler | 全功能控制平面                  |
 
 #### Worker 节点配置（3+ 节点）
 
-| 配置项 | 最低配置 | 推荐配置 | 说明 |
-|--------|----------|----------|------|
-| **CPU** | 4 Core | 16 Core+ | 根据业务负载调整 |
-| **内存** | 16 GB | 64 GB+ | 根据应用需求调整 |
-| **磁盘** | 200 GB SSD | 500 GB NVMe SSD | 容器镜像 + 数据卷 |
-| **网络** | 1 Gbps | 10 Gbps | 业务流量带宽 |
-| **操作系统** | Rocky Linux 9 / Ubuntu 22.04 | Rocky Linux 9 / Ubuntu 22.04 | 保持版本一致 |
-| **角色** | Kubelet + Proxy + Runtime | Kubelet + Proxy + Runtime | 工作负载节点 |
-
-#### 负载均衡节点配置（2 节点）
-
-| 配置项 | 最低配置 | 推荐配置 | 说明 |
-|--------|----------|----------|------|
-| **CPU** | 2 Core | 4 Core | HAProxy/Keepalived |
-| **内存** | 4 GB | 8 GB | 连接跟踪需要内存 |
-| **磁盘** | 50 GB SSD | 100 GB SSD | 系统盘 |
-| **网络** | 1 Gbps | 10 Gbps | API 流量转发 |
-| **VIP** | 192.168.1.9（示例） | 根据规划设置 | 虚拟 IP 地址 |
+| 配置项      | 最低配置                         | 推荐配置                         | 说明         |
+| -------- | ---------------------------- | ---------------------------- | ---------- |
+| **CPU**  | 4 Core                       | 16 Core+                     | 根据业务负载调整   |
+| **内存**   | 16 GB                        | 64 GB+                       | 根据应用需求调整   |
+| **磁盘**   | 200 GB SSD                   | 500 GB NVMe SSD              | 容器镜像 + 数据卷 |
+| **网络**   | 1 Gbps                       | 10 Gbps                      | 业务流量带宽     |
+| **操作系统** | Rocky Linux 9 / Ubuntu 22.04 | Rocky Linux 9 / Ubuntu 22.04 | 保持版本一致     |
+| **角色**   | Kubelet + Proxy + Runtime    | Kubelet + Proxy + Runtime    | 工作负载节点     |
 
 ### 3.3 网络与端口规划
 
 #### Master 节点网络端口
 
-| 源地址 | 目标端口 | 协议 | 用途 |
-|--------|----------|------|------|
-| LB 节点 VIP | 6443 | TCP | Kubernetes API Server |
-| Master 节点间 | 2380 | TCP | etcd peer 通信 |
-| Master 节点间 | 2379 | TCP | etcd client 通信 |
-| 所有节点 | 10250 | TCP | Kubelet API |
-| Worker 节点 | 10259 | TCP | Scheduler 健康 |
-| Worker 节点 | 10257 | TCP | Controller Manager 健康 |
-| 监控节点 | 9100 | TCP | Node Exporter（可选） |
-| 监控节点 | 10249 | TCP | kube-proxy 健康检查 |
+| 源地址           | 目标端口  | 协议  | 用途                    |
+| ------------- | ----- | --- | --------------------- |
+| 客户端/执行机 → apiserver.cluster.local | 6443  | TCP | Kubernetes API Server |
+| Master 节点间    | 2380  | TCP | etcd peer 通信          |
+| Master 节点间    | 2379  | TCP | etcd client 通信        |
+| 所有节点          | 10250 | TCP | Kubelet API           |
+| Worker 节点     | 10259 | TCP | Scheduler 健康          |
+| Worker 节点     | 10257 | TCP | Controller Manager 健康 |
+| 监控节点          | 9100  | TCP | Node Exporter（可选）     |
+| 监控节点          | 10249 | TCP | kube-proxy 健康检查       |
 
 #### Worker 节点网络端口
 
-| 源地址 | 目标端口 | 协议 | 用途 |
-|--------|----------|------|------|
-| Master 节点 | 10250 | TCP | Kubelet API |
-| 所有 Pod | 30000-32767 | TCP/UDP | NodePort 服务范围 |
-| CNI 插件 | 动态分配 | 协议依 CNI | Pod 网络通信（Calico/flannel） |
-| 外部访问 | 80/443 | TCP | Ingress HTTP/HTTPS |
+| 源地址       | 目标端口        | 协议      | 用途                       |
+| --------- | ----------- | ------- | ------------------------ |
+| Master 节点 | 10250       | TCP     | Kubelet API              |
+| 所有 Pod    | 30000-32767 | TCP/UDP | NodePort 服务范围            |
+| CNI 插件    | 动态分配        | 协议依 CNI | Pod 网络通信（Calico/flannel） |
+| 外部访问      | 80/443      | TCP     | Ingress HTTP/HTTPS       |
 
-#### 负载均衡节点网络端口
+#### 控制平面入口网络端口
 
-| 源地址 | 目标端口 | 协议 | 用途 |
-|--------|----------|------|------|
-| 用户/客户端 | 6443 | TCP | Kubernetes API 访问 |
-| Master 节点 | 6443 | TCP | 后端健康检查 |
-| VRRP 组播 | - | VRRP | Keepalived 心跳（默认 224.0.0.18） |
+| 源地址        | 目标端口 | 协议  | 用途                     |
+| ---------- | ---- | --- | ---------------------- |
+| 用户/客户端/执行机 | 6443 | TCP | Kubernetes API 访问（apiserver.cluster.local） |
 
 #### 存储节点网络端口（以 Ceph 为例）
 
-| 源地址 | 目标端口 | 协议 | 用途 |
-|--------|----------|------|------|
-| 所有节点 | 6789 | TCP | Ceph Monitor |
-| 所有节点 | 6800-7300 | TCP | Ceph OSD |
-| 所有节点 | 3300 | TCP | Ceph RBD GW |
+| 源地址  | 目标端口      | 协议  | 用途           |
+| ---- | --------- | --- | ------------ |
+| 所有节点 | 6789      | TCP | Ceph Monitor |
+| 所有节点 | 6800-7300 | TCP | Ceph OSD     |
+| 所有节点 | 3300      | TCP | Ceph RBD GW  |
 
----
+***
 
 ## 4. 生产环境部署
 
@@ -270,149 +265,18 @@ graph TB
 
 #### 4.1.1 系统初始化
 
-```bash
-# ── Rocky Linux 9 ──────────────────────────
-# 配置主机名
-hostnamectl set-hostname sealos-master-01  # ← 根据实际节点修改
-# Master 节点: sealos-master-01/02/03
-# Worker 节点: sealos-worker-01/02/03
-# LB 节点: sealos-lb-01/02
+本节不再要求手工配置主机名与 `/etc/hosts`。只需确保：
 
-# 配置 hosts 文件（所有节点一致）
-cat >> /etc/hosts << 'EOF'
-192.168.1.10 sealos-lb-01
-192.168.1.11 sealos-lb-02
-192.168.1.20 sealos-master-01
-192.168.1.21 sealos-master-02
-192.168.1.22 sealos-master-03
-192.168.1.30 sealos-worker-01
-192.168.1.31 sealos-worker-02
-192.168.1.32 sealos-worker-03
-192.168.1.9  sealos-vip  # ← 虚拟 IP
-EOF
-
-# 更新系统
-dnf update -y
-
-# ── Ubuntu 22.04 ───────────────────────────
-# 配置主机名
-hostnamectl set-hostname sealos-master-01  # ← 根据实际节点修改
-
-# 配置 hosts 文件（所有节点一致）
-cat >> /etc/hosts << 'EOF'
-192.168.1.10 sealos-lb-01
-192.168.1.11 sealos-lb-02
-192.168.1.20 sealos-master-01
-192.168.1.21 sealos-master-02
-192.168.1.22 sealos-master-03
-192.168.1.30 sealos-worker-01
-192.168.1.31 sealos-worker-02
-192.168.1.32 sealos-worker-03
-192.168.1.9  sealos-vip
-EOF
-
-# 更新系统
-apt-get update && apt-get upgrade -y
-```
+- 所有节点 `hostname` 唯一且可解析（通过企业 DNS 或 `/etc/hosts` 均可）
+- 所有节点之间网络互通，满足端口规划要求
 
 #### 4.1.2 关闭 Swap 分区
 
-```bash
-# ── Rocky Linux 9 ──────────────────────────
-# 临时关闭
-swapoff -a
-
-# 永久关闭
-sed -ri 's/^(.*swap.*)$/#\1/g' /etc/fstab
-
-# ── Ubuntu 22.04 ───────────────────────────
-# 临时关闭
-swapoff -a
-
-# 永久关闭
-sed -ri 's/^(.*swap.*)$/#\1/g' /etc/fstab
-```
+本节不再提供 Swap 操作命令。若环境基线已统一处理（例如镜像/初始化脚本已关闭 Swap），可直接跳过。
 
 #### 4.1.3 配置内核参数
 
-```bash
-# ── Rocky Linux 9 & Ubuntu 22.04 ──────────────────────────
-cat >> /etc/sysctl.d/k8s.conf << 'EOF'
-# 网络配置
-net.bridge.bridge-nf-call-ip6tables = 1
-net.bridge.bridge-nf-call-iptables = 1
-net.ipv4.ip_forward = 1
-
-# SELinux 配置（仅 Rocky Linux）
-# net.ipv4.conf.all.rp_filter = 0
-# net.ipv4.conf.default.rp_filter = 0
-
-# 连接跟踪
-net.netfilter.nf_conntrack_max = 1000000
-net.netfilter.nf_conntrack_tcptimeout = 300
-
-# 文件描述符
-fs.file-max = 2097152
-fs.inotify.max_user_watches = 524288
-
-# 内存配置
-vm.swappiness = 0
-vm.overcommit_memory = 1
-vm.panic_on_oom = 0
-
-# IP 分片
-net.ipv4.tcp_max_syn_backlog = 8192
-net.ipv4.tcp_max_tw_buckets = 5000
-net.ipv4.tcp_fastopen = 3
-net.ipv4.tcp_retries2 = 15
-EOF
-
-# ── Rocky Linux 9 ──────────────────────────
-# 加载内核模块
-cat >> /etc/modules-load.d/k8s.conf << 'EOF'
-br_netfilter
-overlay
-ip_vs
-ip_vs_rr
-ip_vs_wrr
-ip_vs_sh
-nf_conntrack
-EOF
-
-modprobe br_netfilter
-modprobe overlay
-modprobe ip_vs
-modprobe ip_vs_rr
-modprobe ip_vs_wrr
-modprobe ip_vs_sh
-modprobe nf_conntrack
-
-# 应用内核参数
-sysctl --system
-
-# ── Ubuntu 22.04 ───────────────────────────
-# 加载内核模块
-cat >> /etc/modules-load.d/k8s.conf << 'EOF'
-br_netfilter
-overlay
-ip_vs
-ip_vs_rr
-ip_vs_wrr
-ip_vs_sh
-nf_conntrack
-EOF
-
-modprobe br_netfilter
-modprobe overlay
-modprobe ip_vs
-modprobe ip_vs_rr
-modprobe ip_vs_wrr
-modprobe ip_vs_sh
-modprobe nf_conntrack
-
-# 应用内核参数
-sysctl --system
-```
+本指南不再单独提供内核参数/模块优化配置，Sealos 会在集群初始化流程中完成必要的环境检查与配置。
 
 #### 4.1.4 配置时间同步
 
@@ -472,194 +336,35 @@ ufw allow 30000:32767/tcp
 ufw allow 30000:32767/udp
 ```
 
-### 4.2 Rocky Linux 9 部署步骤
+### 4.2 部署步骤（以 Rocky Linux 9 为主线）
 
-#### 4.2.1 安装容器运行时（Containerd）
+#### 4.2.1 容器运行时（Sealos 自动安装）
+
+Sealos 集群镜像已内置并自动安装容器运行时（containerd），无需在节点上提前手动安装或配置。
+
+如果节点上已安装过 containerd，请先卸载后再执行 `sealos apply`，否则会触发运行时冲突检查：
 
 ```bash
 # ── Rocky Linux 9 ──────────────────────────
-# 配置 Docker CE 仓库（推荐用于安装 containerd）
-dnf install -y yum-utils
-yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+systemctl disable --now containerd || true
+dnf remove -y containerd.io containerd || true
+rm -rf /etc/containerd /var/lib/containerd /run/containerd
 
-# 安装 containerd.io
-dnf install -y containerd.io
-
-# 配置 containerd
-mkdir -p /etc/containerd
-containerd config default > /etc/containerd/config.toml
-
-# 修改配置使用 systemd cgroup driver
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-
-# ── 优化配置（可选） ────────────────────────
-# 1. 修改数据目录（建议挂载到大容量磁盘，例如 /data/containerd）
-#    默认为 /var/lib/containerd，若 /var 分区较小容易占满
-mkdir -p /data/containerd
-sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
-
-# 2. 修改 sandbox 镜像（国内环境推荐使用阿里云镜像）
-#    默认配置中 sandbox 位于 [plugins."io.containerd.cri.v1.images".pinned_images]
-#    版本通常为 3.10.1，可替换为阿里云镜像以加速拉取
-# sed -i 's|sandbox = .*|sandbox = "registry.aliyuncs.com/google_containers/pause:3.10.1"|' /etc/containerd/config.toml
-
-# 3. 配置国内镜像加速（解决 Docker Hub 拉取限速问题）
-#    注意：默认配置文件为 version = 3 格式，不再支持旧版的 mirrors 内联配置。
-#    必须使用 hosts.toml 方式配置（CRI 插件会自动读取 config_path 指定的目录）。
-#    执行以下命令直接生成配置：
-mkdir -p /etc/containerd/certs.d/docker.io
-cat > /etc/containerd/certs.d/docker.io/hosts.toml << EOF
-server = "https://registry-1.docker.io"
-
-[host."https://docker.1ms.run"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://dockerproxy.net"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://proxy.vvvv.ee"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://dockerproxy.link"]
-  capabilities = ["pull", "resolve"]
-EOF
-
-# 4. 验证镜像加速配置
-#    注意：ctr 是底层调试工具，默认不加载 CRI 镜像配置，必须手动指定 --hosts-dir 才能验证 hosts.toml。
-#    K8s (CRI) 会自动读取 config_path 目录，Pod 启动时会自动使用该代理，无需额外配置。
-#
-#    原理说明：
-#    - ctr 命令：直接与 containerd 交互，默认不加载 CRI 插件配置，需手动指定 hosts 目录。
-#    - K8s (crictl/kubelet)：通过 CRI 接口调用，containerd 的 CRI 插件会自动加载 config_path 配置，
-#      因此 Pod 启动时会自动使用加速镜像，无需任何额外操作。
-#
-#    验证步骤：
-#    1. 确保 config.toml 中开启了配置目录（通常默认已开启）：
-#       grep "config_path" /etc/containerd/config.toml
-#       # 输出应包含: config_path = "/etc/containerd/certs.d" 或类似路径
-#
-#    2. 重启 containerd 生效：
-#       systemctl restart containerd
-#
-#    3. 使用 ctr 指定目录验证代理连通性：
-#       ctr images pull --hosts-dir "/etc/containerd/certs.d" docker.io/library/alpine:latest
-# ──────────────────────────────────────────
-
-
-# 重新加载 systemd
-systemctl daemon-reload
-# 启动并启用 containerd
-systemctl enable --now containerd
-
-# 验证
-systemctl status containerd
-ctr version
+# ── Ubuntu 22.04（差异）────────────────────
+# 其余步骤与 Rocky Linux 9 相同，仅以下命令不同：
+systemctl disable --now containerd || true
+apt-get remove -y containerd.io containerd || true
+apt-get purge  -y containerd.io containerd || true
+rm -rf /etc/containerd /var/lib/containerd /run/containerd
 ```
 
 #### 4.2.2 安装 Sealos
 
 ```bash
-# ── Rocky Linux 9 ──────────────────────────
-# 下载 Sealos 二进制文件
-SEALOS_VERSION="5.1.1"  # ← 根据需要修改版本
-# 注意：install.sh 脚本在拼接 URL 时可能存在问题（如多余的 repo 名称），建议直接下载二进制文件
-# curl -sfL https://raw.githubusercontent.com/labring/sealos/main/scripts/install.sh \
-#   | sh -s v${SEALOS_VERSION} labring/sealos:${SEALOS_VERSION}
-
-# 推荐：直接下载二进制文件（更稳定）
-wget https://github.com/labring/sealos/releases/download/v${SEALOS_VERSION}/sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
-tar -zxvf sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
-mv sealos /usr/local/bin/
-chmod +x /usr/local/bin/sealos
-
-# 验证安装
-sealos version
-```
-
-解压包内文件说明：
-
-- `sealos`：Sealos 主命令，负责集群创建/扩容/升级/应用交付等核心能力（实际运行时主要用它）
-- `sealctl`：Sealos 辅助管理工具，常用于集群运维/诊断类的配套命令（按需使用）
-- `lvscare`：Sealos 组件之一，用于在集群中提供/维护 LVS 相关能力（通常作为组件随集群使用，不必单独手工执行）
-- `image-cri-shim`：镜像相关的 CRI 适配组件，用于与容器运行时/CRI 交互的场景（通常随 Sealos 流程或组件使用）
-- `README.md`：当前版本的发行包说明、用法提示与变更信息
-
-### 4.3 Ubuntu 22.04 部署步骤
-
-#### 4.3.1 安装容器运行时（Containerd）
-
-```bash
-# ── Ubuntu 22.04 ───────────────────────────
-# 安装依赖
-apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
-
-# 添加 Docker GPG 密钥
-mkdir -p /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-
-# 添加 Docker 仓库
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# 安装 containerd
-apt-get update
-apt-get install -y containerd.io
-
-# 配置 containerd
-mkdir -p /etc/containerd
-containerd config default > /etc/containerd/config.toml
-
-# 修改配置使用 systemd cgroup driver
-sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-
-# ── 优化配置（可选） ────────────────────────
-# 1. 修改数据目录（建议挂载到大容量磁盘，例如 /data/containerd）
-#    默认为 /var/lib/containerd，若 /var 分区较小容易占满
-mkdir -p /data/containerd
-sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
-
-# 2. 修改 sandbox 镜像（国内环境推荐使用阿里云镜像）
-#    默认配置中 sandbox 常见为 sandbox = 'registry.k8s.io/pause:3.10.1'
-# sed -i 's|sandbox = .*|sandbox = "registry.aliyuncs.com/google_containers/pause:3.10.1"|' /etc/containerd/config.toml
-
-# 3. 配置国内镜像加速（解决 Docker Hub 拉取限速问题）
-#    默认配置通常开启了 config_path，推荐使用 hosts.toml 方式配置镜像，无需修改 config.toml
-mkdir -p /etc/containerd/certs.d/docker.io
-cat > /etc/containerd/certs.d/docker.io/hosts.toml << EOF
-server = "https://registry-1.docker.io"
-
-[host."https://docker.1ms.run"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://dockerproxy.net"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://proxy.vvvv.ee"]
-  capabilities = ["pull", "resolve"]
-
-[host."https://dockerproxy.link"]
-  capabilities = ["pull", "resolve"]
-EOF
-# ──────────────────────────────────────────
-
-# 启动并启用 containerd
-systemctl enable --now containerd
-
-# 验证
-systemctl status containerd
-ctr version
-```
-
-#### 4.3.2 安装 Sealos
-
-```bash
-# ── Ubuntu 22.04（与 Rocky9 相同，通用步骤）──────────────
-# 下载 Sealos 二进制文件（推荐：直接下载，更稳定可靠）
 SEALOS_VERSION="5.1.1"  # ← 根据需要修改版本
 
-wget https://github.com/labring/sealos/releases/download/v${SEALOS_VERSION}/sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
-tar -zxvf sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
+[ -f "sealos_${SEALOS_VERSION}_linux_amd64.tar.gz" ] || wget https://github.com/labring/sealos/releases/download/v${SEALOS_VERSION}/sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
+tar -zxf sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
 mv sealos /usr/local/bin/
 chmod +x /usr/local/bin/sealos
 
@@ -754,6 +459,7 @@ localAPIEndpoint:
 nodeRegistration:
   kubeletExtraArgs:
     node-ip: 192.168.33.100          # ★ 与 advertiseAddress 保持一致
+    pod-infra-container-image: registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9
   taints: null                        # 不指定自定义 taint；默认仍会给控制平面节点打 NoSchedule 污点。若需允许在 Master 调度可改为 taints: []
 
 ---
@@ -763,26 +469,27 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 kubernetesVersion: v1.28.0
-# ★ 高可用 VIP 域名（Sealos 会自动配置 lvscare 负载均衡，无需外部 LB）
-# 访问 API Server 统一使用此域名，sealos 会把它写入 /etc/hosts
+imageRepository: registry.cn-hangzhou.aliyuncs.com/google_containers
+# ★ 控制平面入口（Sealos v5：由 lvscare 管理）
+# - Master 节点上：apiserver.cluster.local 通常解析为“本机 Master IP”
+# - Worker 节点上：apiserver.cluster.local 通常解析为 “10.103.97.2”（lvscare 虚拟 IP）
 controlPlaneEndpoint: apiserver.cluster.local:6443
 
 networking:
   podSubnet: 100.64.0.0/10           # ★ Pod 网段，避免与物理网络冲突
-  serviceSubnet: 10.96.0.0/22        # ★ Service 网段
+  serviceSubnet: 10.96.0.0/16        # ★ Service 网段
 
 apiServer:
   # ★ 证书 SAN：API Server 证书中的额外域名/IP，客户端通过这些地址访问需提前配置
   certSANs:
     - 127.0.0.1
-    - apiserver.cluster.local         # sealos 内部 VIP 域名（必须保留）
-    - 10.103.97.2                     # ← sealos 自动分配的 Service CIDR 首地址（保留）
+    - apiserver.cluster.local         # ★ Sealos 控制平面入口域名
     - 192.168.33.100                  # ← Master1 实际 IP
     - 192.168.33.101                  # ← Master2 实际 IP
     - 192.168.33.102                  # ← Master3 实际 IP
     # 可按需追加访问域名：
     # - k8s.example.com
-    # - 192.168.33.200                # 如有外部 LB VIP，也加进来
+    # - apiserver.cluster.local
   extraArgs:
     # 审计日志（生产必开）
     audit-log-format: json
@@ -849,9 +556,7 @@ kind: KubeProxyConfiguration
 # ★ 代理模式：ipvs（生产推荐，性能优于 iptables）
 mode: ipvs
 ipvs:
-  # ★ 排除 VIP Service IP（避免 ipvs 规则干扰 sealos 内部通信）
-  excludeCIDRs:
-    - 10.103.97.2/32                  # ← 与 certSANs 中的 Service IP 保持一致
+  excludeCIDRs: []
   strictARP: false
   syncPeriod: 30s
 conntrack:
@@ -895,7 +600,8 @@ serializeImagePulls: false
 ```
 
 EOF
-```
+
+````
 
 
 
@@ -949,8 +655,7 @@ sealos apply -f Clusterfile
 #   --masters 192.168.33.100,192.168.33.101,192.168.33.102 \
 #   --nodes   192.168.33.103,192.168.33.104,192.168.33.105 \
 #   --passwd  'YourStrongPassword'
-```
-
+````
 
 #### 4.4.3 验证集群状态
 
@@ -1062,7 +767,7 @@ kubectl get endpoints nginx-test -n test-namespace
 
 # 6. 测试访问
 NODE_PORT=$(kubectl get svc nginx-test -n test-namespace -o jsonpath='{.spec.ports[0].nodePort}')
-curl http://192.168.1.30:$NODE_PORT
+curl http://192.168.33.103:$NODE_PORT
 
 # 预期输出（HTML 响应）：
 # <!DOCTYPE html>
@@ -1081,51 +786,26 @@ kubectl delete namespace test-namespace
 #### 4.5.2 高可用验证
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 测试 VIP 故障切换
-# 在 LB-01 节点停止 Keepalived
-systemctl stop keepalived
+# 1) 验证通过 VIP 访问 API Server
+kubectl get --raw='/readyz'
+# 预期输出：ok
 
-# VIP 应自动漂移到 LB-02，验证：
-ip addr show | grep 192.168.1.9
-
-# 预期输出（在 LB-02 上应显示 VIP）：
-# inet 192.168.1.9/32 scope global eth0
-
-# 2. 测试 API Server 访问
-kubectl get nodes
-
-# 预期输出（应正常显示节点列表）：
-# NAME                STATUS   ROLES           AGE   VERSION
-# sealos-master-01    Ready    control-plane   30m   v1.29.0
-# ...
-
-# 3. 测试 Master 节点故障恢复
-# 模拟停止 Master-01 的 API Server
+# 2) 模拟下线一个 Master（在被测试的 Master 上执行）
 systemctl stop kubelet
 
-# 等待 30 秒后验证集群状态
+# 3) 验证集群仍可访问（在另一台 Master 或原执行机上执行）
 kubectl get nodes
+# 预期输出：其余 Master 仍 Ready，可正常返回节点列表
 
-# 预期输出（其他 Master 节点仍正常工作）：
-# NAME                STATUS   ROLES           AGE   VERSION
-# sealos-master-01    NotReady control-plane   35m   v1.29.0
-# sealos-master-02    Ready    control-plane   34m   v1.29.0
-# sealos-master-03    Ready    control-plane   33m   v1.29.0
-
-# 恢复 Master-01
+# 4) 恢复该 Master
 systemctl start kubelet
 
-# 验证节点恢复
+# ✅ 验证
 kubectl get nodes
-
-# 预期输出（所有节点恢复 Ready）：
-# NAME                STATUS   ROLES           AGE   VERSION
-# sealos-master-01    Ready    control-plane   40m   v1.29.0
-# ...
+# 预期输出：所有节点恢复 Ready
 ```
 
----
+***
 
 ## 5. 关键参数配置说明
 
@@ -1133,653 +813,167 @@ kubectl get nodes
 
 #### 5.1.1 Kubernetes API Server 配置
 
+API Server 相关参数由 `Clusterfile` 的 kubeadm 配置（`ClusterConfiguration.apiServer`）统一下发。
+
+> ⚠️ 不建议直接修改 `/etc/kubernetes/manifests/kube-apiserver.yaml`（静态 Pod 清单由 kubeadm 管理，手工改动容易被覆盖且不便回溯）。
+
+```yaml
+# Clusterfile（文档 3/5：ClusterConfiguration）示例摘录
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v1.28.0
+imageRepository: registry.cn-hangzhou.aliyuncs.com/google_containers
+controlPlaneEndpoint: apiserver.cluster.local:6443   # ★ Sealos 控制平面入口（Worker 上通常解析为 10.103.97.2）
+
+networking:
+  podSubnet: 100.64.0.0/10                  # ★
+  serviceSubnet: 10.96.0.0/16               # ★
+
+apiServer:
+  certSANs:
+    - apiserver.cluster.local                # ★ 证书 SAN：入口域名
+    - 192.168.33.100
+    - 192.168.33.101
+    - 192.168.33.102
+  extraArgs:
+    audit-log-format: json
+    audit-log-maxage: "7"
+    audit-log-maxbackup: "10"
+    audit-log-maxsize: "100"
+    audit-log-path: /var/log/kubernetes/audit.log
+    audit-policy-file: /etc/kubernetes/audit-policy.yml
+```
+
 ```bash
-# ── 所有系统通用 ──────────────────────────
-cat >> /etc/kubernetes/manifests/kube-apiserver.yaml << 'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: kube-apiserver
-  namespace: kube-system
-spec:
-  containers:
-  - name: kube-apiserver
-    image: registry.k8s.io/kube-apiserver:v1.29.0
-    command:
-    - kube-apiserver
-    # ★ API Server 监听端口（默认 6443，生产环境建议保持）
-    - --secure-port=6443
-
-    # ★ 服务 Cluster IP 范围（⚠️ 与 ClusterConfig 中 svcCIDR 保持一致）
-    - --service-cluster-ip-range=10.96.0.0/12
-
-    # ★ etcd 服务器地址（⚠️ 根据实际节点 IP 修改）
-    - --etcd-servers=https://192.168.1.20:2379,https://192.168.1.21:2379,https://192.168.1.22:2379
-
-    # ★ etcd 证书和密钥路径
-    - --etcd-cafile=/etc/kubernetes/pki/etcd/ca.crt
-    - --etcd-certfile=/etc/kubernetes/pki/apiserver-etcd-client.crt
-    - --etcd-keyfile=/etc/kubernetes/pki/apiserver-etcd-client.key
-
-    # ★ 访问控制模式（生产环境必须启用 RBAC）
-    - --authorization-mode=Node,RBAC
-
-    # ★ Pod 网段（⚠️ 与 ClusterConfig 中 podCIDR 保持一致）
-    - --cluster-cidr=100.64.0.0/10
-
-    # 令牌认证文件
-    - --token-auth-file=/etc/kubernetes/pki/tokens.csv
-
-    # ★ 客户端 CA 证书
-    - --client-ca-file=/etc/kubernetes/pki/ca.crt
-
-    # ★ 启用 admission 插件
-    - --enable-admission-plugins=NodeRestriction,ResourceQuota,LimitRanger,ServiceAccount
-
-    # ★ 证书有效期相关（⚠️ 建议延长至 10 年）
-    - --cluster-signing-duration=876000h  # 10 年
-
-    # ★ 审计日志路径（⚠️ 生产环境必须启用）
-    - --audit-log-path=/var/log/kubernetes/audit.log
-
-    # ★ 审计日志保留天数
-    - --audit-log-maxage=30
-
-    # ★ 审计日志最大备份数
-    - --audit-log-maxbackup=10
-
-    # ★ 审计日志最大大小（MB）
-    - --audit-log-maxsize=100
-
-    # ★ 匿名认证（⚠️ 生产环境必须禁用）
-    - --anonymous-auth=false
-
-    # ★ 请求体大小限制（MB，防止大请求攻击）
-    - --max-request-body-size=3145728
-
-    # TLS 证书和密钥
-    - --tls-cert-file=/etc/kubernetes/pki/apiserver.crt
-    - --tls-private-key-file=/etc/kubernetes/pki/apiserver.key
-
-    # ★ 服务账号密钥
-    - --service-account-key-file=/etc/kubernetes/pki/sa.pub
-
-    # ★ 服务账号签发者
-    - --service-account-signing-key-file=/etc/kubernetes/pki/sa.key
-
-    # ★ 服务账号 Issuer（⚠️ 根据集群域名修改）
-    - --service-account-issuer=https://sealos.example.com:6443
-
-    # ★ API Server 证书 SAN（⚠️ 必须包含 VIP 和所有节点 IP）
-    - --kubelet-client-certificate=/etc/kubernetes/pki/apiserver-kubelet-client.crt
-    - --kubelet-client-key=/etc/kubernetes/pki/apiserver-kubelet-client.key
-
-    # ★ 启用聚合层
-    - --enable-aggregator-routing=true
-
-    # 代理相关
-    - --proxy-client-cert-file=/etc/kubernetes/pki/front-proxy-client.crt
-    - --proxy-client-key-file=/etc/kubernetes/pki/front-proxy-client.key
-
-    # ★ 节点端口范围（⚠️ 根据实际需求修改）
-    - --service-node-port-range=30000-32767
-
-    # ★ Kubelet 预留 CPU（⚠️ 根据节点配置调整）
-    - --kubelet-cpu-requirements=100m
-
-    # ★ 事件保留时长
-    - --event-ttl=168h  # 7 天
-
-    # 日志级别
-    - --v=2
-
-    # 资源限制
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-      limits:
-        cpu: 2000m
-        memory: 4Gi
-
-    # 健康检查
-    livenessProbe:
-      httpGet:
-        host: 127.0.0.1
-        path: /livez
-        port: 6443
-        scheme: HTTPS
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      timeoutSeconds: 15
-      failureThreshold: 8
-
-    readinessProbe:
-      httpGet:
-        host: 127.0.0.1
-        path: /readyz
-        port: 6443
-        scheme: HTTPS
-      initialDelaySeconds: 10
-      periodSeconds: 10
-      timeoutSeconds: 15
-      failureThreshold: 8
-
-    # 挂载卷
-    volumeMounts:
-    - name: etcd-certs
-      mountPath: /etc/kubernetes/pki/etcd
-      readOnly: true
-    - name: k8s-certs
-      mountPath: /etc/kubernetes/pki
-      readOnly: true
-    - name: audit-log
-      mountPath: /var/log/kubernetes
-      readOnly: false
-
-  # 卷定义
-  volumes:
-  - name: etcd-certs
-    hostPath:
-      path: /etc/kubernetes/pki/etcd
-      type: DirectoryOrCreate
-  - name: k8s-certs
-    hostPath:
-      path: /etc/kubernetes/pki
-      type: DirectoryOrCreate
-  - name: audit-log
-    hostPath:
-      path: /var/log/kubernetes
-      type: DirectoryOrCreate
-EOF
+# ✅ 验证
+kubectl get pods -n kube-system -o wide | grep kube-apiserver
+# 预期输出：kube-apiserver-* 为 Running
 ```
 
 #### 5.1.2 Kubelet 配置
 
-```bash
-# ── 所有系统通用 ──────────────────────────
-cat >> /var/lib/kubelet/config.yaml << 'EOF'
+Kubelet 参数由 `InitConfiguration.nodeRegistration.kubeletExtraArgs`（节点注册参数）与 `KubeletConfiguration`（kubelet 配置）共同决定。
+
+> ⚠️ 不建议直接覆盖写入 `/var/lib/kubelet/config.yaml`（该文件由 kubeadm 生成/维护）。
+
+```yaml
+# Clusterfile（文档 2/5：InitConfiguration）示例摘录
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: 192.168.33.100
+    pod-infra-container-image: registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9
+
+---
+# Clusterfile（文档 5/5：KubeletConfiguration）示例摘录
 apiVersion: kubelet.config.k8s.io/v1beta1
 kind: KubeletConfiguration
-# ★ Kubelet 监听地址（0.0.0.0 允许所有接口访问）
-address: 0.0.0.0
-
-# ★ API Server 地址（⚠️ 使用 VIP 实现高可用）
-apiServer: https://192.168.1.9:6443
-
-# ★ 集群 DNS 地址
-clusterDNS:
-- 10.96.0.10
-
-# ★ 集群域名
-clusterDomain: cluster.local
-
-# ★ Pod 网段（⚠️ 与全局配置保持一致）
-podCIDR: "100.64.0.0/10"
-
-# ★ 容器运行时端点
-containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
-
-# ★ cgroup 驱动（⚠️ 必须与 containerd 配置一致）
 cgroupDriver: systemd
-
-# ★ 镜像拉取策略（默认 Always，可优化为 IfNotPresent）
-imagePullPolicy: IfNotPresent
-
-# ★ 镜像最少保留数量
-imageMinimumGCAge: 2h
-
-# ★ 镜像 GC 间隔
-imageGCHighThresholdPercent: 85
-imageGCLowThresholdPercent: 80
-
-# ★ Pod 最少保留数量
-podGCThreshold: 50
-
-# ★ 节点资源预留（⚠️ 根据节点配置调整）
-enforceNodeAllocatable:
-- pods
-systemReserved:
-  cpu: 500m
-  memory: 1Gi
-  ephemeral-storage: 5Gi
-kubeReserved:
-  cpu: 500m
-  memory: 1Gi
-  ephemeral-storage: 5Gi
-
-# ★ 最大 Pod 数量（⚠️ 根据节点性能调整）
 maxPods: 110
-
-# ★ Pod 网络配置
-networkPluginName: cni
-
-# ★ TLS 证书
-tlsCertFile: /var/lib/kubelet/pki/kubelet-client-current.pem
-tlsPrivateKeyFile: /var/lib/kubelet/pki/kubelet-client-current.pem
-
-# ★ CA 证书
-authentication:
-  x509:
-    clientCAFile: /etc/kubernetes/pki/ca.crt
-
-# ★ 授权模式
-authorization:
-  mode: Webhook
-  webhook:
-    cacheAuthorizedTTL: 5m
-    cacheUnauthorizedTTL: 30s
-
-# ★ 失败驱逐超时（⚠️ 根据应用特性调整）
+serializeImagePulls: false
 evictionHard:
-  memory.available: "100Mi"
-  nodefs.available: "10%"
-  nodefs.inodesFree: "5%"
-  imagefs.available: "15%"
+  imagefs.available: 10%
+  memory.available: 100Mi
+  nodefs.available: 10%
+  nodefs.inodesFree: 5%
+```
 
-# ★ 卷插件目录
-volumePluginDir: /var/lib/kubelet/volumeplugins
-
-# ★ 日志轮转配置
-containerLogMaxSize: 10Mi
-containerLogMaxFiles: 5
-
-# ★ 轮转证书
-rotateCertificates: true
-serverTLSBootstrap: true
-
-# ★ 只读端口（10255 用于监控，⚠️ 生产环境需配合认证）
-readOnlyPort: 10255
-
-# ★ 健康检查端口（10248 用于本地健康检查）
-healthzPort: 10248
-
-# ★ 宕机容忍时间
-nodeStatusUpdateFrequency: 10s
-nodeStatusReportFrequency: 5m
-EOF
+```bash
+# ✅ 验证
+kubectl get nodes -o wide
+# 预期输出：所有节点为 Ready
 ```
 
 ### 5.2 生产环境推荐调优参数
 
 #### 5.2.1 集群级别调优
 
+集群级别调优优先通过 `Clusterfile` 下发，避免运行后再手工修改静态 Pod/ConfigMap 造成不可追溯。
+
+```yaml
+# etcd 调优（Clusterfile：文档 3/5，ClusterConfiguration.etcd.local.extraArgs）
+etcd:
+  local:
+    extraArgs:
+      snapshot-count: "10000"          # ⚠️ 按写入量调整
+      quota-backend-bytes: "2147483648"
+
+---
+# kube-proxy 代理模式（Clusterfile：文档 4/5，KubeProxyConfiguration）
+mode: ipvs
+```
+
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. etcd 性能调优
-cat >> /etc/etcd/etcd.conf.yml << 'EOF'
-# ★ 快照间隔（生产环境推荐 10000-100000）
-snapshot-count: 10000
-
-# ★ 心跳间隔（ms）
-heartbeat-interval: 100
-
-# ★ 选举超时（ms）
-election-timeout: 1000
-
-# ★ 配额后端字节数（2GB）
-quota-backend-bytes: 2147483648
-
-# ★ 最大请求字节数（10MB）
-max-request-bytes: 10485760
-
-# ★ 监听对等 URL
-listen-peer-urls: https://192.168.1.20:2380  # ← 根据实际 IP 修改
-
-# ★ 监听客户端 URL
-listen-client-urls: https://192.168.1.20:2379,https://127.0.0.1:2379
-
-# ★ 初始集群（⚠️ 包含所有 etcd 节点）
-initial-cluster: sealos-master-01=https://192.168.1.20:2380,sealos-master-02=https://192.168.1.21:2380,sealos-master-03=https://192.168.1.22:2380
-
-# ★ 初始集群状态
-initial-cluster-state: new
-
-# ★ 初始集群令牌（⚠️ 自定义令牌）
-initial-cluster-token: sealos-etcd-cluster-001
-
-# ★ 数据目录
-data-dir: /var/lib/etcd
-
-# ★ 集群名称
-name: sealos-master-01  # ← 每个节点不同
-EOF
-
-# 2. 控制器并发数调整
-kubectl edit deployment -n kube-system coredns
-# 添加以下环境变量：
-# - name: GOMAXPROCS
-#   value: "2"
-
-# 3. 调整 DNS 副本数（根据节点数量）
-kubectl scale deployment coredns -n kube-system --replicas=3
-
-# 4. 启用 IPVS 模式（性能优于 iptables）
-kubectl edit configmap kube-proxy -n kube-system
-# 修改：
-# mode: "ipvs"
-EOF
+# ✅ 验证
+kubectl get pods -n kube-system -o wide | egrep 'coredns|kube-proxy|etcd'
+# 预期输出：核心组件 Running
 ```
 
 #### 5.2.2 节点级别调优
 
-```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 内核参数优化
-cat >> /etc/sysctl.d/k8s-tuning.conf << 'EOF'
-# 网络性能优化
-net.core.somaxconn = 32768
-net.ipv4.tcp_max_syn_backlog = 8192
-net.core.netdev_max_backlog = 16384
-
-# TCP 优化
-net.ipv4.tcp_fin_timeout = 30
-net.ipv4.tcp_keepalive_time = 600
-net.ipv4.tcp_keepalive_intvl = 30
-net.ipv4.tcp_keepalive_probes = 3
-
-# 连接跟踪
-net.netfilter.nf_conntrack_max = 2000000
-net.netfilter.nf_conntrack_tcp_timeout_established = 1200
-
-# 文件系统优化
-fs.inotify.max_user_instances = 8192
-fs.inotify.max_user_watches = 1048576
-
-# 共享内存
-kernel.shmmax = 68719476736
-kernel.shmall = 4294967296
-EOF
-
-sysctl --system
-
-# 2. 文件描述符限制
-cat >> /etc/security/limits.d/k8s.conf << 'EOF'
-* soft nofile 65536
-* hard nofile 65536
-* soft nproc 65536
-* hard nproc 65536
-* soft memlock unlimited
-* hard memlock unlimited
-EOF
-
-# 3. Containerd 优化
-cat >> /etc/containerd/config.toml << 'EOF'
-[plugins."io.containerd.grpc.v1.cri".containerd]
-  # ★ 镜像拉取并发数
-  max_concurrent_downloads = 10
-
-  # ★ 容器退出时删除延迟
-  discard_unpacked_layers = true
-
-[plugins."io.containerd.grpc.v1.cri".registry]
-  # ★ 镜像拉取超时
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-      endpoint = ["https://registry-1.docker.io"]
-
-    # ★ 国内镜像加速（⚠️ 可选，根据网络环境）
-    # [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-    #   endpoint = ["https://docker.mirrors.ustc.edu.cn"]
-EOF
-
-systemctl restart containerd
-
-# 4. 日志轮转配置
-cat >> /etc/logrotate.d/k8s-containers << 'EOF'
-/var/log/containers/*.log {
-    daily
-    rotate 7
-    compress
-    missingok
-    notifempty
-    create 0644 root root
-    maxage 30
-}
-EOF
-```
+本指南不再提供节点内核参数优化与 containerd 调优配置，避免与 Sealos 的集群镜像内置组件产生冲突。调优建议以实际监控指标为准，按需在业务侧与系统侧逐项验证后落地。
 
 #### 5.2.3 应用级别调优建议
 
-| 调优项 | 推荐配置 | 说明 |
-|--------|----------|------|
-| **资源请求（Request）** | 根据实际使用量设置 | 避免过度分配 |
-| **资源限制（Limit）** | Request 的 1.5-2 倍 | 防止资源耗尽 |
-| **副本数** | 生产环境至少 3 副本 | 保证高可用 |
-| **亲和性** | 跨节点分散部署 | 避免单点故障 |
-| **健康检查** | 配置就绪和存活探针 | 自动恢复异常 Pod |
-| **优雅关闭** | 设置 terminationGracePeriodSeconds | 默认 30 秒 |
-| **Pod 反亲和性** | 关键应用必须配置 | 避免同节点调度 |
+| 调优项               | 推荐配置                             | 说明         |
+| ----------------- | -------------------------------- | ---------- |
+| **资源请求（Request）** | 根据实际使用量设置                        | 避免过度分配     |
+| **资源限制（Limit）**   | Request 的 1.5-2 倍                | 防止资源耗尽     |
+| **副本数**           | 生产环境至少 3 副本                      | 保证高可用      |
+| **亲和性**           | 跨节点分散部署                          | 避免单点故障     |
+| **健康检查**          | 配置就绪和存活探针                        | 自动恢复异常 Pod |
+| **优雅关闭**          | 设置 terminationGracePeriodSeconds | 默认 30 秒    |
+| **Pod 反亲和性**      | 关键应用必须配置                         | 避免同节点调度    |
 
----
+***
 
-## 6. 开发/测试环境快速部署（Docker Compose）
+## 6. 快速体验部署（开发 / 测试环境）
 
-### 6.1 Docker Compose 部署（单机或伪集群）
+### 6.1 快速启动方案选型
 
-> ⚠️ **重要提示**：以下部署方式仅适用于开发/测试环境，**不适用于生产环境**。
+Sealos 本身就是集群生命周期管理工具，开发/测试环境优先使用 **单机最小化集群**（VM/物理机直接部署），不采用 Docker Compose 的“容器里再跑容器”方案。
 
-#### 6.1.1 前置条件
+> ⚠️ 本章仅用于开发/测试环境验证流程，严禁用于生产。
 
-```bash
-# ── 所有系统通用 ──────────────────────────
-# 安装 Docker
-curl -fsSL https://get.docker.com | sh
+### 6.2 快速启动步骤与验证
 
-# 启动 Docker
-systemctl enable --now docker
-
-# 验证
-docker version
-docker compose version
-```
-
-#### 6.1.2 创建 Docker Compose 配置
+> 🖥️ **执行节点：单机（同时作为执行机与节点）**
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 创建项目目录
-mkdir -p ~/sealos-dev
-cd ~/sealos-dev
+mkdir -p /root/sealos-dev
+cd /root/sealos-dev
 
-# 创建 Docker Compose 配置
-cat >> docker-compose.yml << 'EOF'
-version: '3.8'
+# 如节点已预装 containerd，先按 4.2.1 卸载，避免运行时冲突
 
-services:
-  # Sealos 单节点集群
-  sealos-single:
-    image: labring/sealos:v5.0.0
-    container_name: sealos-single
-    hostname: sealos-single
-    privileged: true
-    restart: unless-stopped
-    ports:
-      - "6443:6443"    # Kubernetes API
-      - "8080:8080"    # Dashboard
-    volumes:
-      - ./data/sealos:/var/lib/sealos
-      - ./data/kubelet:/var/lib/kubelet
-      - ./data/etcd:/var/lib/etcd
-      - ./data/containerd:/var/lib/containerd
-      - /sys/fs/cgroup:/sys/fs/cgroup:ro
-    environment:
-      - SEALOS_DEBUG=false
-    networks:
-      sealos-net:
-        ipv4_address: 172.20.0.10
-    healthcheck:
-      test: ["CMD", "kubectl", "get", "nodes"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+sealos run \
+  labring/kubernetes:v1.28.0 \
+  labring/helm:v3.12.0 \
+  labring/calico:v3.26.1 \
+  --single \
+  --passwd 'YourStrongPassword'
 
-  # MySQL 数据库（测试应用使用）
-  mysql:
-    image: mysql:8.0
-    container_name: sealos-mysql
-    restart: unless-stopped
-    ports:
-      - "3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: root123  # ← ⚠️ 仅测试环境
-      MYSQL_DATABASE: appdb
-      MYSQL_USER: appuser
-      MYSQL_PASSWORD: apppass123
-    volumes:
-      - ./data/mysql:/var/lib/mysql
-    networks:
-      sealos-net:
-        ipv4_address: 172.20.0.20
+# ✅ 验证
+kubectl get nodes -o wide
+# 预期输出：只有 1 个节点且为 Ready
 
-  # Redis 缓存（测试应用使用）
-  redis:
-    image: redis:7-alpine
-    container_name: sealos-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    command: redis-server --requirepass redis123  # ← ⚠️ 仅测试环境
-    volumes:
-      - ./data/redis:/data
-    networks:
-      sealos-net:
-        ipv4_address: 172.20.0.30
-
-  # NFS 存储服务
-  nfs-server:
-    image: itsthenetwork/nfs-server-alpine:latest
-    container_name: sealos-nfs
-    restart: unless-stopped
-    privileged: true
-    ports:
-      - "2049:2049"
-    environment:
-      SHARED_DIRECTORY: /export
-    volumes:
-      - ./data/nfs:/export
-    networks:
-      sealos-net:
-        ipv4_address: 172.20.0.40
-
-networks:
-  sealos-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/24
-EOF
-```
-
-#### 6.1.3 创建启动脚本
-
-```bash
-# ── 所有系统通用 ──────────────────────────
-cat >> start.sh << 'EOF'
-#!/bin/bash
-set -e
-
-echo "🚀 启动 Sealos 开发环境..."
-
-# 创建数据目录
-mkdir -p data/{sealos,kubelet,etcd,containerd,mysql,redis,nfs}
-
-# 启动服务
-docker compose up -d
-
-echo "⏳ 等待服务启动..."
-sleep 30
-
-# 验证服务状态
-echo "✅ 检查服务状态..."
-docker compose ps
-
-# 复制 kubeconfig
-echo "📝 配置 kubectl..."
-docker exec sealos-single cat /etc/kubernetes/admin.conf > ~/sealos-dev/kubeconfig
-sed -i 's/localhost:6443/127.0.0.1:6443/g' ~/sealos-dev/kubeconfig
-
-export KUBECONFIG=~/sealos-dev/kubeconfig
-
-# 验证集群
-echo "✅ 验证集群状态..."
-kubectl get nodes
 kubectl get pods -A
-
-echo "🎉 Sealos 开发环境启动成功！"
-echo ""
-echo "📊 Dashboard 访问地址: http://localhost:8080"
-echo "🔧 Kubernetes API: https://localhost:6443"
-echo "📝 Kubeconfig 文件: ~/sealos-dev/kubeconfig"
-echo ""
-echo "💡 常用命令："
-echo "   export KUBECONFIG=~/sealos-dev/kubeconfig"
-echo "   kubectl get nodes"
-echo "   kubectl get pods -A"
-EOF
-
-chmod +x start.sh
+# 预期输出：kube-system 命名空间核心组件均为 Running
 ```
 
-#### 6.1.4 创建停止脚本
+### 6.3 停止与清理
+
+> �️ **执行节点：单机（同上）**
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-cat >> stop.sh << 'EOF'
-#!/bin/bash
-set -e
+sealos reset --force
 
-echo "🛑 停止 Sealos 开发环境..."
-docker compose down
-
-echo "💡 清理数据？(y/N)"
-read -r response
-if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-    echo "🗑️  清理数据..."
-    sudo rm -rf data/*
-    echo "✅ 数据已清理"
-fi
-
-echo "✅ Sealos 开发环境已停止"
-EOF
-
-chmod +x stop.sh
-```
-
-### 6.2 启动与验证
-
-```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 启动开发环境
-./start.sh
-
-# 2. 验证服务
-docker compose ps
-
-# 预期输出（所有服务应为 Up 状态）：
-# NAME              COMMAND                  SERVICE            STATUS
-# sealos-single     "/sbin/init"             sealos-single      Up (healthy)
-# sealos-mysql      "docker-entrypoint.s…"   mysql              Up
-# sealos-redis      "redis-server --req…"    redis              Up
-# sealos-nfs        "/usr/bin/nfs-server…"   nfs-server         Up
-
-# 3. 访问集群
-export KUBECONFIG=~/sealos-dev/kubeconfig
+# ✅ 验证
 kubectl get nodes
-
-# 4. 部署测试应用
-kubectl create deployment nginx --image=nginx --replicas=2
-kubectl expose deployment nginx --port=80 --type=NodePort
-
-# 5. 获取访问地址
-NODE_PORT=$(kubectl get svc nginx -o jsonpath='{.spec.ports[0].nodePort}')
-echo "访问地址: http://localhost:$NODE_PORT"
-
-# 6. 停止环境
-./stop.sh
+# 预期输出：无法连接到集群（已清理）
 ```
 
----
+***
 
 ## 7. 日常运维操作
 
@@ -1849,33 +1043,53 @@ kubectl uncordon <node-name>
 #### 7.1.2 Sealos CLI 命令
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 查看 Sealos 版本
 sealos version
 
-# 2. 查看集群状态
 sealos status
 
-# 3. 添加 Master 节点
-sealos add --masters 192.168.1.23
+# 生成 Clusterfile（推荐用 --output，避免重定向把日志写进文件）
+sealos gen labring/kubernetes:v1.28.0 labring/helm:v3.12.0 labring/calico:v3.26.1 \
+  --masters 192.168.33.100,192.168.33.101,192.168.33.102 \
+  --nodes 192.168.33.103,192.168.33.104 \
+  --passwd 'YourStrongPassword' \
+  --output Clusterfile
 
-# 4. 添加 Worker 节点
-sealos add --nodes 192.168.1.33,192.168.1.34
+# 创建/更新集群（基于 Clusterfile）
+sealos apply -f Clusterfile
 
-# 5. 删除节点
-sealos delete --nodes 192.168.1.33
+# 快速部署（不写 Clusterfile，适合快速验证）
+sealos run labring/kubernetes:v1.28.0 labring/calico:v3.26.1 --masters 192.168.33.100 --nodes 192.168.33.103 --passwd 'YourStrongPassword'
 
-# 6. 清理集群
+# 扩缩容
+sealos add --masters 192.168.33.106
+sealos add --nodes 192.168.33.107,192.168.33.108
+sealos delete --nodes 192.168.33.108
+
+# 远程操作（批量执行命令/拷贝文件）
+sealos exec --help
+sealos scp --help
+
+# 集群清理（高危：会重置集群并清理节点上的 Kubernetes/Sealos 数据）
 sealos reset
 
-# 7. 部署应用
-sealos run labring/nginx:latest
+# 其他命令（按需查看）
+sealos cert --help
+sealos registry --help
+sealos images --help
+```
 
-# 8. 查看集群配置
-sealos config view
+**集群清理（reset）说明：**
 
-# 9. 备份集群配置
-sealos config backup > /backup/sealos-config-backup.yaml
+- `sealos reset` 用于**卸载/重置整个集群**：会通过 SSH 在各节点清理 kubelet、静态 Pod、CNI、etcd/k8s 数据目录等，使节点回到可重新部署的状态。
+- 建议在“部署集群的同一台执行机”上运行（能免密/同密码 SSH 到所有节点的那台机器）。
+- 如果只是移除某个节点，优先使用 `sealos delete --nodes ...` / `sealos delete --masters ...`，不要直接 reset 整个集群。
+
+```bash
+# 交互式重置（默认会提示确认）
+sealos reset
+
+# 强制重置（适合自动化/无人值守）
+sealos reset --force
 ```
 
 #### 7.1.3 应用管理命令
@@ -1938,93 +1152,77 @@ kubectl delete pod <pod-name> -n <namespace> --force --grace-period=0
 #### 7.2.1 etcd 备份（物理备份）
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. etcd 数据快照备份
-ETCDCTL_API=3 etcdctl \
-  --endpoints=https://192.168.1.20:2379,https://192.168.1.21:2379,https://192.168.1.22:2379 \
+# 🖥️ 执行节点：任意一台 Master 节点
+mkdir -p /backup
+
+kubectl -n kube-system get pods | grep '^etcd-'
+ETCD_POD="$(kubectl -n kube-system get pods -o name | awk -F/ '$2 ~ /^etcd-/{print $2; exit}')"
+SNAP="etcd-snapshot-$(date +%F-%H%M).db"
+
+ETCD_CID=""
+if kubectl -n kube-system exec "$ETCD_POD" -- sh -c "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/server.crt \
-  --key=/etc/kubernetes/pki/etcd/server.key \
-  snapshot save /backup/etcd-snapshot-$(date +%Y%m%d-%H%M%S).db
+  --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
+  --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+  snapshot save /var/lib/etcd/$SNAP"; then
+  kubectl -n kube-system exec "$ETCD_POD" -- sh -c "ETCDCTL_API=3 etcdctl snapshot status /var/lib/etcd/$SNAP"
+else
+  ETCD_CID="$(crictl ps -a --name etcd -q | head -n 1)"
+  crictl exec "$ETCD_CID" sh -c "ETCDCTL_API=3 etcdctl \
+    --endpoints=https://127.0.0.1:2379 \
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+    --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
+    --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+    snapshot save /var/lib/etcd/$SNAP"
 
-# 预期输出：
-# Snapshot saved at /backup/etcd-snapshot-20260309-143022.db
+  crictl exec "$ETCD_CID" sh -c "ETCDCTL_API=3 etcdctl snapshot status /var/lib/etcd/$SNAP"
+fi
 
-# 2. 验证快照
-ETCDCTL_API=3 etcdctl \
-  --write-out=table \
-  snapshot status /backup/etcd-snapshot-20260309-143022.db
-
-# 3. 定时备份脚本
-cat >> /usr/local/bin/etcd-backup.sh << 'EOF'
-#!/bin/bash
-BACKUP_DIR="/backup/etcd"
-RETENTION_DAYS=7
-DATE=$(date +%Y%m%d-%H%M%S)
-
-# 创建备份目录
-mkdir -p $BACKUP_DIR
-
-# 执行备份
-ETCDCTL_API=3 etcdctl \
-  --endpoints=https://192.168.1.20:2379 \
-  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/server.crt \
-  --key=/etc/kubernetes/pki/etcd/server.key \
-  snapshot save $BACKUP_DIR/etcd-snapshot-$DATE.db
-
-# 清理旧备份
-find $BACKUP_DIR -name "etcd-snapshot-*.db" -mtime +$RETENTION_DAYS -delete
-
-# 记录日志
-echo "[$(date)] etcd backup completed: etcd-snapshot-$DATE.db" >> /var/log/etcd-backup.log
-EOF
-
-chmod +x /usr/local/bin/etcd-backup.sh
-
-# 添加定时任务（每天凌晨 2 点执行）
-crontab -e
-# 添加：
-0 2 * * * /usr/local/bin/etcd-backup.sh
+cp -a "/var/lib/etcd/$SNAP" "/backup/$SNAP"
+ls -lh "/backup/$SNAP"
 ```
 
 #### 7.2.2 etcd 恢复
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 停止所有 Master 节点的静态 Pod
+# 🖥️ 执行节点：任意一台 Master 节点
+# ⚠️ etcd 灾难恢复会导致控制面中断。生产请先演练并严格按官方流程执行。
+
+# 0) 选定快照文件（在 Master 上）
+SNAP=/backup/etcd-snapshot-YYYY-MM-DD-HHMM.db
+
+# 1) 准备：把快照放到 etcd 的 hostPath（容器与宿主机都能访问）
+cp -a "$SNAP" /var/lib/etcd/restore.db
+rm -rf /var/lib/etcd-restore
+
+# 2) 从 etcd 静态 Pod 清单获取当前节点的恢复参数（每台 Master 都不一样）
+ETCD_YAML=/etc/kubernetes/manifests/etcd.yaml
+grep -E -- '--name=|--initial-advertise-peer-urls=|--initial-cluster=|--initial-cluster-token=' "$ETCD_YAML"
+
+# 3) 把上一步 grep 输出的值填到下面 4 个变量（在每台 Master 上分别执行）
+NAME="<this-master-node-name>"
+INITIAL_ADVERTISE_PEER_URLS="https://<this-master-ip>:2380"
+INITIAL_CLUSTER="<master1-name>=https://<master1-ip>:2380,<master2-name>=https://<master2-ip>:2380,<master3-name>=https://<master3-ip>:2380"
+INITIAL_CLUSTER_TOKEN="<cluster-token>"
+
+# 4) 使用 etcd 容器内的 etcdctl 做 restore（不依赖容器内 env/etcdutl）
+ETCD_CID="$(crictl ps -a --name etcd -q | head -n 1)"
+crictl exec "$ETCD_CID" sh -c "ETCDCTL_API=3 etcdctl snapshot restore /var/lib/etcd/restore.db \
+  --data-dir=/var/lib/etcd-restore \
+  --name=$NAME \
+  --initial-advertise-peer-urls=$INITIAL_ADVERTISE_PEER_URLS \
+  --initial-cluster=$INITIAL_CLUSTER \
+  --initial-cluster-token=$INITIAL_CLUSTER_TOKEN"
+
+# 5) 切换数据目录（该 Master 上）
 systemctl stop kubelet
-
-# 删除 API Server 和 Controller Manager Pod
-rm -f /etc/kubernetes/manifests/kube-apiserver.yaml
-rm -f /etc/kubernetes/manifests/kube-controller-manager.yaml
-
-# 2. 恢复 etcd 数据（在第一个 Master 节点执行）
-ETCDCTL_API=3 etcdctl \
-  snapshot restore /backup/etcd-snapshot-20260309-143022.db \
-  --data-dir=/var/lib/etcd-restore
-
-# 3. 更新 etcd 配置指向新数据目录
-# 修改 /etc/kubernetes/manifests/etcd.yaml 中的 --data-dir 参数
-
-# 4. 启动 etcd
-systemctl daemon-reload
-systemctl restart etcd
-
-# 5. 验证 etcd 健康状态
-ETCDCTL_API=3 etcdctl \
-  --endpoints=https://192.168.1.20:2379 \
-  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
-  --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
-  endpoint health
-
-# 6. 恢复 API Server 和 Controller Manager
+mv /var/lib/etcd "/var/lib/etcd.bak-$(date +%F-%H%M)"
+mv /var/lib/etcd-restore /var/lib/etcd
 systemctl start kubelet
 
-# 7. 验证集群恢复
-kubectl get nodes
-kubectl get pods -A
+# 6) 清理临时文件
+rm -f /var/lib/etcd/restore.db
 ```
 
 #### 7.2.3 资源备份（逻辑备份）
@@ -2069,14 +1267,14 @@ velero restore create --from-backup <backup-name>
 # 1. 准备新节点（参考第 4.1 节前置准备）
 
 # 2. 使用 Sealos 添加节点
-sealos add --nodes 192.168.1.33,192.168.1.34
+sealos add --nodes 192.168.33.105,192.168.33.106 --passwd 'YourStrongPassword'
 
 # 3. 验证节点加入
 kubectl get nodes
 
 # 4. 给新节点打标签（可选）
-kubectl label nodes 192.168.1.33 node-role.kubernetes.io/worker=
-kubectl label nodes 192.168.1.33 zone=us-west-1
+kubectl label node <node-name> node-role.kubernetes.io/worker=
+kubectl label node <node-name> zone=us-west-1
 ```
 
 #### 7.3.2 添加 Master 节点
@@ -2086,14 +1284,11 @@ kubectl label nodes 192.168.1.33 zone=us-west-1
 # 1. 准备新 Master 节点（参考第 4.1 节前置准备）
 
 # 2. 使用 Sealos 添加 Master 节点
-sealos add --masters 192.168.1.23
+sealos add --masters 192.168.33.107 --passwd 'YourStrongPassword'
 
 # 3. 验证控制平面状态
-kubectl get nodes
-kubectl get cs
-
-# 4. 更新负载均衡器后端列表
-# 在 LB 节点添加新 Master IP 到 HAProxy 配置
+kubectl get nodes -o wide
+kubectl get --raw='/readyz'
 ```
 
 #### 7.3.3 删除节点
@@ -2123,12 +1318,32 @@ iptables -F && iptables -t nat -F && iptables -t mangle -F && iptables -X
 ```bash
 # ── 所有系统通用 ──────────────────────────
 # 1. 备份集群（⚠️ 必须执行）
-ETCDCTL_API=3 etcdctl \
-  --endpoints=https://192.168.1.20:2379 \
+mkdir -p /backup
+kubectl -n kube-system get pods | grep '^etcd-'
+ETCD_POD="$(kubectl -n kube-system get pods -o name | awk -F/ '$2 ~ /^etcd-/{print $2; exit}')"
+SNAP="etcd-pre-upgrade-$(date +%F).db"
+
+ETCD_CID=""
+if kubectl -n kube-system exec "$ETCD_POD" -- sh -c "ETCDCTL_API=3 etcdctl \
+  --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
-  --cert=/etc/kubernetes/pki/etcd/server.crt \
-  --key=/etc/kubernetes/pki/etcd/server.key \
-  snapshot save /backup/etcd-pre-upgrade-$(date +%Y%m%d).db
+  --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
+  --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+  snapshot save /var/lib/etcd/$SNAP"; then
+  kubectl -n kube-system exec "$ETCD_POD" -- sh -c "ETCDCTL_API=3 etcdctl snapshot status /var/lib/etcd/$SNAP"
+else
+  ETCD_CID="$(crictl ps -a --name etcd -q | head -n 1)"
+  crictl exec "$ETCD_CID" sh -c "ETCDCTL_API=3 etcdctl \
+    --endpoints=https://127.0.0.1:2379 \
+    --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+    --cert=/etc/kubernetes/pki/etcd/healthcheck-client.crt \
+    --key=/etc/kubernetes/pki/etcd/healthcheck-client.key \
+    snapshot save /var/lib/etcd/$SNAP"
+  crictl exec "$ETCD_CID" sh -c "ETCDCTL_API=3 etcdctl snapshot status /var/lib/etcd/$SNAP"
+fi
+
+cp -a "/var/lib/etcd/$SNAP" "/backup/$SNAP"
+ls -lh "/backup/$SNAP"
 
 # 2. 备份所有资源
 kubectl get all --all-namespaces -o yaml > /backup/k8s-pre-upgrade-$(date +%Y%m%d).yaml
@@ -2136,131 +1351,76 @@ kubectl get all --all-namespaces -o yaml > /backup/k8s-pre-upgrade-$(date +%Y%m%
 # 3. 检查当前版本
 kubectl version
 
-# 4. 查看可升级版本
-sealos version --list-upgrades
-
-# 5. 验证集群健康
-kubectl get cs
-kubectl get nodes
+# 4. 验证集群健康
+kubectl get --raw='/readyz'
+kubectl get nodes -o wide
 ```
 
 #### 7.4.2 执行升级
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 升级 Master 节点（逐个升级）
-# 在 Master-01 执行
-sealos upgrade --version v1.29.1 --master 192.168.1.20
+# 🖥️ 执行节点：Master-01（执行机）
+# 1) 修改 Clusterfile 的 Kubernetes 集群镜像版本（示例：v1.28.0 → v1.29.1）
+# spec:
+#   image:
+#     - labring/kubernetes:v1.29.1
 
-# 验证 Master-01 升级成功
-kubectl get nodes
-kubectl get pods -A | grep -v Running
+# 2) 执行升级（Sealos 会按集群状态滚动更新）
+sealos apply -f Clusterfile
 
-# 在 Master-02 执行
-sealos upgrade --version v1.29.1 --master 192.168.1.21
-
-# 验证 Master-02 升级成功
-kubectl get nodes
-
-# 在 Master-03 执行
-sealos upgrade --version v1.29.1 --master 192.168.1.22
-
-# 验证所有 Master 节点升级成功
-kubectl get nodes
-
-# 2. 升级 Worker 节点（逐个升级）
-sealos upgrade --version v1.29.1 --node 192.168.1.30
-sealos upgrade --version v1.29.1 --node 192.168.1.31
-sealos upgrade --version v1.29.1 --node 192.168.1.32
-
-# 3. 验证集群升级
-kubectl version
-kubectl get nodes
+# ✅ 验证
+kubectl get nodes -o wide
 kubectl get pods -A
-
-# 4. 验证应用运行状态
-kubectl get pods -A | grep -v Running
 ```
 
 #### 7.4.3 回滚方案
 
 ```bash
-# ── 所有系统通用 ──────────────────────────
-# 1. 检查升级失败的节点
-kubectl get nodes
+# 1) 回滚版本：把 Clusterfile 的镜像版本改回升级前版本（示例：v1.29.1 → v1.28.0）
+# spec:
+#   image:
+#     - labring/kubernetes:v1.28.0
 
-# 2. 停止故障节点的 kubelet
-systemctl stop kubelet
+# 2) 执行回滚
+sealos apply -f Clusterfile
 
-# 3. 恢复 etcd 数据（如果 etcd 损坏）
-# 停止 etcd
-systemctl stop etcd
+# 3) 如控制面不可用，使用升级前快照按 kubeadm/etcd 官方流程恢复（⚠️ 有中断）
+# 备份文件：/backup/etcd-pre-upgrade-YYYY-MM-DD.db
 
-# 恢复快照
-ETCDCTL_API=3 etcdctl \
-  snapshot restore /backup/etcd-pre-upgrade-20260309.db \
-  --data-dir=/var/lib/etcd
-
-# 启动 etcd
-systemctl start etcd
-
-# 4. 降级 Kubernetes 组件
-# 下载旧版本二进制
-wget https://dl.k8s.io/v1.29.0/kubernetes-server-linux-amd64.tar.gz
-tar -zxvf kubernetes-server-linux-amd64.tar.gz
-
-# 替换二进制文件
-cp kubernetes/server/bin/kubelet /usr/bin/
-cp kubernetes/server/bin/kubeadm /usr/bin/
-cp kubernetes/server/bin/kubectl /usr/bin/
-
-# 5. 重启 kubelet
-systemctl daemon-reload
-systemctl restart kubelet
-
-# 6. 验证回滚
-kubectl version
+# ✅ 验证
 kubectl get nodes
 kubectl get pods -A
-
-# 7. 如果回滚失败，重建节点
-kubeadm reset
-rm -rf /etc/cni/net.d
-rm -rf /var/lib/kubelet
-
-# 重新加入集群
-kubeadm join 192.168.1.9:6443 --token <token> --discovery-token-ca-cert-hash sha256:<hash>
 ```
 
----
+***
 
 ## 9. 注意事项与生产检查清单
 
 ### 9.1 安装前环境核查
 
-| 检查项 | 检查命令 | 预期结果 | 重要性 |
-|--------|----------|----------|--------|
-| **操作系统版本** | `cat /etc/os-release` | Rocky Linux 9 / Ubuntu 22.04 | ⭐⭐⭐ |
-| **CPU 架构** | `uname -m` | x86_64 / aarch64 | ⭐⭐⭐ |
-| **CPU 核心数** | `nproc` | Master≥4核，Worker≥4核 | ⭐⭐⭐ |
-| **内存大小** | `free -h` | Master≥8GB，Worker≥16GB | ⭐⭐⭐ |
-| **磁盘空间** | `df -h` | ≥100GB 可用空间 | ⭐⭐⭐ |
-| **网络连通性** | `ping -c 3 <目标IP>` | 所有节点互通 | ⭐⭐⭐ |
-| **DNS 解析** | `nslookup kubernetes.default.svc.cluster.local` | 可解析 | ⭐⭐ |
-| **时间同步** | `chronyc sources -v` | NTP 服务器在线 | ⭐⭐⭐ |
-| **Swap 状态** | `free -h` | Swap 行为 0 | ⭐⭐⭐ |
-| **防火墙状态** | `firewall-cmd --list-all` / `ufw status` | 必要端口已开放 | ⭐⭐⭐ |
-| **SELinux 状态** | `getenforce` | Permissive / Disabled | ⭐⭐ |
-| **文件描述符** | `ulimit -n` | ≥65536 | ⭐⭐ |
-| **内核模块** | `lsmod \| grep br_netfilter` | br_netfilter 已加载 | ⭐⭐⭐ |
-| **容器运行时** | `containerd --version` | 版本≥1.6.0 | ⭐⭐⭐ |
-| **SSH 访问** | `ssh root@<节点IP>` | 免密登录成功 | ⭐⭐⭐ |
+| 检查项            | 检查命令                                                         | 预期结果                         | 重要性 |
+| -------------- | ------------------------------------------------------------ | ---------------------------- | --- |
+| **操作系统版本**     | `cat /etc/os-release`                                        | Rocky Linux 9 / Ubuntu 22.04 | ⭐⭐⭐ |
+| **CPU 架构**     | `uname -m`                                                   | x86\_64 / aarch64            | ⭐⭐⭐ |
+| **CPU 核心数**    | `nproc`                                                      | Master≥4核，Worker≥4核          | ⭐⭐⭐ |
+| **内存大小**       | `free -h`                                                    | Master≥8GB，Worker≥16GB       | ⭐⭐⭐ |
+| **磁盘空间**       | `df -h`                                                      | ≥100GB 可用空间                  | ⭐⭐⭐ |
+| **网络连通性**      | `ping -c 3 <目标IP>`                                           | 所有节点互通                       | ⭐⭐⭐ |
+| **DNS 解析**     | `nslookup kubernetes.default.svc.cluster.local`              | 可解析                          | ⭐⭐  |
+| **时间同步**       | `chronyc sources -v`                                         | NTP 服务器在线                    | ⭐⭐⭐ |
+| **Swap 状态**    | `free -h`                                                    | Swap 行为 0                    | ⭐⭐⭐ |
+| **防火墙状态**      | `firewall-cmd --list-all` / `ufw status`                     | 必要端口已开放                      | ⭐⭐⭐ |
+| **SELinux 状态** | `getenforce`                                                 | Permissive / Disabled        | ⭐⭐  |
+| **文件描述符**      | `ulimit -n`                                                  | ≥65536                       | ⭐⭐  |
+| **容器运行时**      | `command -v containerd \|\| echo "containerd not installed"` | 建议未预装（Sealos 会安装）            | ⭐⭐⭐ |
+| **SSH 访问**     | `ssh root@<节点IP>`                                            | 免密登录成功                       | ⭐⭐⭐ |
 
 ### 9.2 常见故障排查
 
 #### 9.2.1 节点 NotReady 状态
 
 **现象**：
+
 ```bash
 kubectl get nodes
 # NAME                STATUS     ROLES           AGE   VERSION
@@ -2268,12 +1428,14 @@ kubectl get nodes
 ```
 
 **可能原因**：
+
 1. 容器运行时未启动
 2. CNI 网络插件未就绪
 3. 节点资源不足
 4. 网络配置错误
 
 **排查步骤**：
+
 ```bash
 # 1. 检查容器运行时
 systemctl status containerd
@@ -2293,6 +1455,7 @@ route -n
 ```
 
 **解决方案**：
+
 ```bash
 # 1. 启动 containerd
 systemctl start containerd
@@ -2313,6 +1476,7 @@ systemctl restart kubelet
 #### 9.2.2 Pod 一直 Pending 状态
 
 **现象**：
+
 ```bash
 kubectl get pods -A
 # NAME                          READY   STATUS    RESTARTS   AGE
@@ -2320,12 +1484,14 @@ kubectl get pods -A
 ```
 
 **可能原因**：
+
 1. 集群资源不足
 2. 节点选择器不匹配
 3. 污点和容忍度冲突
 4. 持久卷未挂载
 
 **排查步骤**：
+
 ```bash
 # 1. 查看 Pod 详情
 kubectl describe pod <pod-name> -n <namespace>
@@ -2341,9 +1507,10 @@ kubectl get pv,pvc -n <namespace>
 ```
 
 **解决方案**：
+
 ```bash
 # 1. 添加节点或扩容
-sealos add --nodes 192.168.1.35
+sealos add --nodes <node-ip> --passwd 'YourStrongPassword'
 
 # 2. 调整资源请求
 kubectl set resources deployment <name> --requests=cpu=200m,memory=256Mi -n <namespace>
@@ -2358,6 +1525,7 @@ kubectl apply -f pv.yaml
 #### 9.2.3 镜像拉取失败（ImagePullBackOff）
 
 **现象**：
+
 ```bash
 kubectl get pods -n <namespace>
 # NAME                          READY   STATUS              RESTARTS   AGE
@@ -2365,12 +1533,14 @@ kubectl get pods -n <namespace>
 ```
 
 **可能原因**：
+
 1. 镜像不存在或标签错误
 2. 镜像仓库认证失败
 3. 网络问题无法访问镜像仓库
 4. 镜像太大拉取超时
 
 **排查步骤**：
+
 ```bash
 # 1. 查看 Pod 详情
 kubectl describe pod <pod-name> -n <namespace>
@@ -2379,13 +1549,14 @@ kubectl describe pod <pod-name> -n <namespace>
 kubectl get pod <pod-name> -n <namespace> -o yaml
 
 # 3. 手动拉取镜像测试
-crictl pull <image>
+ctr images pull <image>
 
 # 4. 检查镜像拉取凭证
 kubectl get secrets -n <namespace>
 ```
 
 **解决方案**：
+
 ```bash
 # 1. 修正镜像名称和标签
 kubectl set image deployment/<name> <container>=<correct-image> -n <namespace>
@@ -2402,41 +1573,47 @@ kubectl create secret docker-registry regcred \
 #   imagePullSecrets:
 #   - name: regcred
 
-# 3. 配置镜像加速（修改 containerd 配置）
-cat >> /etc/containerd/config.toml << 'EOF'
-[plugins."io.containerd.grpc.v1.cri".registry.mirrors]
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-    endpoint = ["https://docker.mirrors.ustc.edu.cn"]
+# 3. 配置镜像加速（推荐使用 hosts.toml，不直接修改 config.toml）
+mkdir -p /etc/containerd/certs.d/docker.io
+cat > /etc/containerd/certs.d/docker.io/hosts.toml << EOF
+server = "https://registry-1.docker.io"
+
+[host."https://docker.1ms.run"]
+  capabilities = ["pull", "resolve"]
 EOF
 
 systemctl restart containerd
 
-# 4. 预拉取镜像
-crictl pull <image>
+# 4. 预拉取镜像（ctr 调试场景可按需指定 hosts 目录）
+ctr images pull --hosts-dir "/etc/containerd/certs.d" <image>
 ```
 
 #### 9.2.4 API Server 无法访问
 
 **现象**：
+
 ```bash
 kubectl get nodes
-# The connection to the server 192.168.1.9:6443 was refused
+# The connection to the server apiserver.cluster.local:6443 was refused
 ```
 
 **可能原因**：
+
 1. API Server 未启动
-2. 负载均衡器故障
+2. lvscare 入口域名解析异常（Master/Worker 解析行为不同）
 3. 证书过期
 4. 防火墙阻断
 
 **排查步骤**：
+
 ```bash
 # 1. 检查 API Server Pod
 kubectl get pods -n kube-system | grep apiserver
 
-# 2. 检查负载均衡器
-ssh lb-01 "systemctl status haproxy"
-ssh lb-01 "ip addr show | grep 192.168.1.9"
+# 2. 检查 apiserver.cluster.local 解析结果
+# Master 节点上通常解析为本机 Master IP
+# Worker 节点上通常解析为 10.103.97.2（lvscare 虚拟 IP）
+getent hosts apiserver.cluster.local || cat /etc/hosts | grep apiserver.cluster.local
 
 # 3. 检查证书有效期
 openssl x509 -in /etc/kubernetes/pki/apiserver.crt -noout -dates
@@ -2447,22 +1624,15 @@ ufw status              # Ubuntu
 ```
 
 **解决方案**：
+
 ```bash
-# 1. 重启 API Server
-# 删除 API Server Pod 让其自动重建
-rm -f /etc/kubernetes/manifests/kube-apiserver.yaml
+# 1. 重启控制平面静态 Pod（在任意 Master 上执行）
+systemctl restart kubelet
 
 # 等待 30 秒后验证
 kubectl get nodes
 
-# 2. 修复负载均衡器
-# 重启 HAProxy
-systemctl restart haproxy
-
-# 重启 Keepalived
-systemctl restart keepalived
-
-# 3. 续期证书
+# 2. 续期证书
 kubeadm certs renew all
 systemctl restart kubelet
 
@@ -2471,3 +1641,18 @@ firewall-cmd --permanent --add-port=6443/tcp
 firewall-cmd --reload
 ```
 
+### 9.3 安全加固建议
+
+- **SSH 认证**：生产环境优先使用私钥认证，禁用弱口令与非必要的 root 远程登录
+- **API 访问面**：6443 仅对运维网段开放（云环境优先用安全组控制）
+- **审计日志**：启用并落盘（已在 Clusterfile 示例中通过 `apiServer.extraArgs` 配置）
+- **最小权限**：按需创建 kubeconfig/RBAC，避免长期使用 admin.conf
+- **镜像来源**：统一镜像仓库与代理策略，避免节点直连不可信 Registry
+
+## 10. 参考资料
+
+- [Sealos GitHub](https://github.com/labring/sealos)
+- [Sealos 官方文档](https://sealos.run/)
+- [kubeadm 配置规范](https://kubernetes.io/docs/reference/config-api/kubeadm-config.v1beta3/)
+- [Containerd Registry 配置](https://github.com/containerd/containerd/blob/main/docs/hosts.md)
+- [Calico 官方文档](https://docs.tigera.io/calico/latest/)

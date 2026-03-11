@@ -1,0 +1,182 @@
+# ═══════════════════════════════════════════════════════════
+# 文档 1/5：Cluster（Sealos 自有资源，定义集群整体）
+# ═══════════════════════════════════════════════════════════
+apiVersion: apps.sealos.io/v1beta1   # ★ v5 固定 API 版本，不可改为 sealos.io/v1beta1
+kind: Cluster
+metadata:
+  name: default                       # 集群名称，sealos status 等命令会用到
+spec:
+  # ★ 镜像列表（Sealos 会按顺序加载）
+  # 可到 https://hub.sealos.io 或 https://explore.ggcr.dev 查询可用版本
+  image:
+    - labring/kubernetes:v1.28.0   # ★ K8s 核心组件（含 kubelet/kubeadm/kubectl/containerd）
+    - labring/helm:v3.12.0         # ★ Helm 包管理器
+    - labring/calico:v3.26.1       # ★ CNI 网络插件（也可替换为 cilium/flannel）
+
+  # ★ SSH 认证配置（Sealos 通过 SSH 管理所有节点，无需预先安装 Agent）
+  ssh:
+    passwd: '123'   # ⚠️ 生产环境建议改用私钥认证
+    # pk: /root/.ssh/id_rsa          # ← 若用私钥，取消此行注释，注释 passwd
+    # pkPasswd: ''                 # 私钥密码（如有）
+    port: 22                       # SSH 端口，可按需修改
+
+  # ★ 节点规划（v5 格式：hosts 数组 + roles，不再是 masters/nodes 并列字段）
+  hosts:
+    - roles: [master, amd64]       # master = control-plane；amd64 为架构标签
+      ips:
+        - 192.168.33.100:22        # ← 根据实际 IP 修改，格式 IP:Port
+        - 192.168.33.101:22
+        - 192.168.33.102:22
+    - roles: [node, amd64]         # node = worker
+      ips:
+        - 192.168.33.103:22
+        - 192.168.33.104:22
+
+
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 2/5：InitConfiguration（kubeadm 初始化配置）
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: 192.168.33.100   # ★ 第一个 Master 的实际 IP（由 sealos gen 自动填充）
+  bindPort: 6443
+nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: 192.168.33.100          # ★ 与 advertiseAddress 保持一致
+    pod-infra-container-image: registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.9
+  taints: null                        # 不指定自定义 taint；默认仍会给控制平面节点打 NoSchedule 污点。若需允许在 Master 调度可改为 taints: []
+
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 3/5：ClusterConfiguration（kubeadm 集群配置）
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v1.28.0
+imageRepository: registry.cn-hangzhou.aliyuncs.com/google_containers
+# ★ 控制平面入口（Sealos v5：由 lvscare 管理）
+# - Master 节点上：apiserver.cluster.local 通常解析为“本机 Master IP”
+# - Worker 节点上：apiserver.cluster.local 通常解析为 “10.103.97.2”（lvscare 虚拟 IP）
+controlPlaneEndpoint: apiserver.cluster.local:6443
+
+networking:
+  podSubnet: 100.64.0.0/10           # ★ Pod 网段，避免与物理网络冲突
+  serviceSubnet: 10.96.0.0/16        # ★ Service 网段（避免与 10.103.97.2 冲突）
+
+apiServer:
+  # ★ 证书 SAN：API Server 证书中的额外域名/IP，客户端通过这些地址访问需提前配置
+  certSANs:
+    - 127.0.0.1
+    - apiserver.cluster.local         # ★ Sealos 控制平面入口域名
+    - 192.168.33.100                  # ← Master1 实际 IP
+    - 192.168.33.101                  # ← Master2 实际 IP
+    - 192.168.33.102                  # ← Master3 实际 IP
+  extraArgs:
+    # 审计日志（生产必开）
+    audit-log-format: json
+    audit-log-maxage: "7"
+    audit-log-maxbackup: "10"
+    audit-log-maxsize: "100"
+    audit-log-path: /var/log/kubernetes/audit.log
+    audit-policy-file: /etc/kubernetes/audit-policy.yml
+    enable-aggregator-routing: "true"
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/kubernetes
+      mountPath: /etc/kubernetes
+      name: audit
+      pathType: DirectoryOrCreate
+    - hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      name: audit-log
+      pathType: DirectoryOrCreate
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
+
+controllerManager:
+  extraArgs:
+    bind-address: 0.0.0.0
+    # ★ 证书有效期延长至 10 年（默认 1 年，生产环境推荐延长）
+    cluster-signing-duration: 876000h
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
+
+scheduler:
+  extraArgs:
+    bind-address: 0.0.0.0
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
+
+etcd:
+  local:
+    dataDir: ""                       # 留空使用默认 /var/lib/etcd
+    extraArgs:
+      listen-metrics-urls: http://0.0.0.0:2381   # 暴露 metrics 给 Prometheus
+
+dns: {}
+
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 4/5：KubeProxyConfiguration
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+# ★ 代理模式：ipvs（生产推荐，性能优于 iptables）
+mode: ipvs
+ipvs:
+  excludeCIDRs: []
+  strictARP: false
+  syncPeriod: 30s
+conntrack:
+  maxPerCore: 32768
+  min: 131072
+  tcpEstablishedTimeout: 24h0m0s
+  tcpCloseWaitTimeout: 1h0m0s
+metricsBindAddress: 0.0.0.0:10249
+healthzBindAddress: 0.0.0.0:10256
+bindAddress: 0.0.0.0
+
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 5/5：KubeletConfiguration
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+# ★ cgroup 驱动（需与 containerd 的 SystemdCgroup=true 保持一致）
+cgroupDriver: systemd
+containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+# ★ 最大 Pod 数（根据节点配置调整，默认 110）
+maxPods: 110
+# ★ 驱逐阈值（生产环境防止节点资源耗尽）
+evictionHard:
+  imagefs.available: 10%
+  memory.available: 100Mi
+  nodefs.available: 10%
+  nodefs.inodesFree: 5%
+# 日志保留
+containerLogMaxFiles: 5
+containerLogMaxSize: 10Mi
+# 提高 API 请求限速（高并发集群）
+kubeAPIBurst: 100
+kubeAPIQPS: 50
+registryBurst: 100
+registryPullQPS: 50
+# 证书自动轮换
+rotateCertificates: true
+# 并发拉镜像（加快 Pod 启动）
+serializeImagePulls: false
