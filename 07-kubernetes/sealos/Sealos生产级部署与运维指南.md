@@ -635,13 +635,29 @@ spec:
     # ★ Service 网段
     svcCIDR: 10.96.0.0/12
 
-    # Calico 特定配置
+    # Calico 特定配置（网络通信模式选型）
+    # ⚠️ 请根据您的实际网络环境选择以下三种模式之一：
     calico:
-      # IPVS 模式
-      ipip: "Always"
-      vxlan: "Never"
-      # 跨节点通信模式
-      mode: "BGP"
+      # 【选项 1】VXLAN 模式（强烈推荐，云环境/复杂网络首选）
+      # - 特点：兼容性最好，不依赖底层路由，使用 UDP 封装。不会被云平台（如阿里云/AWS）拦截。
+      # - 适用：公有云环境、不能保证 BGP 畅通的本地机房。
+      ipip: "Never"
+      vxlan: "Always"
+      mode: "VXLAN"
+      
+      # 【选项 2】纯 BGP 模式（性能最高）
+      # - 特点：不封装协议，网络损耗极小（接近原生）。
+      # - 适用：本地物理机房（所有节点在同二层子网）；或底层网络已配置支持 BGP。
+      # ipip: "Never"
+      # vxlan: "Never"
+      # mode: "BGP"
+      
+      # 【选项 3】BGP + IPIP 模式（传统模式）
+      # - 特点：同网段走 BGP，跨网段用 IPIP 封装。
+      # - 注意：部分防火墙/云环境默认拦截 IPIP 协议，会导致跨节点 Pod 不互通。
+      # ipip: "Always"  # 或 "CrossSubnet"
+      # vxlan: "Never"
+      # mode: "BGP"
 
   # 容器运行时
   containerRuntime:
@@ -658,8 +674,10 @@ spec:
     authorizationMode: "Node,RBAC"
 
     # ★ 服务客户端证书（⚠️ 根据实际域名修改）
+    # 注意：certSANs 只能配置在 apiServer 下，不可配置在根级或 kubelet 下
     certSANs:
-      - "sealos.example.com"  # ← 根据实际域名修改
+      - "sealos.example.com"    # ← 根据实际域名修改
+      - "*.sealos.example.com"  # ← 泛域名支持
       - "192.168.1.9"
       - "192.168.1.20"
       - "192.168.1.21"
@@ -697,9 +715,6 @@ spec:
       # 镜像拉取超时
       serialize-image-pulls: "false"
 
-  # 证书有效期（默认 1 年，可延长至 10 年）
-  certSANs:
-    - "*.sealos.example.com"  # ← 根据实际域名修改
 EOF
 ```
 
