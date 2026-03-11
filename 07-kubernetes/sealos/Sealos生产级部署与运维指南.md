@@ -478,18 +478,12 @@ ufw allow 30000:32767/udp
 
 ```bash
 # ── Rocky Linux 9 ──────────────────────────
-# 配置 Containerd 仓库
-cat >> /etc/yum.repos.d/containerd.repo << 'EOF'
-[containerd]
-name=Containerd
-baseurl=https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/CentOS_9/
-enabled=1
-gpgcheck=1
-gpgkey=https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/CentOS_9/repodata/repomd.xml.key
-EOF
+# 配置 Docker CE 仓库（推荐用于安装 containerd）
+dnf install -y yum-utils
+yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
 
-# 安装 containerd
-dnf install -y containerd
+# 安装 containerd.io
+dnf install -y containerd.io
 
 # 配置 containerd
 mkdir -p /etc/containerd
@@ -498,6 +492,62 @@ containerd config default > /etc/containerd/config.toml
 # 修改配置使用 systemd cgroup driver
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
 
+# ── 优化配置（可选） ────────────────────────
+# 1. 修改数据目录（建议挂载到大容量磁盘，例如 /data/containerd）
+#    默认为 /var/lib/containerd，若 /var 分区较小容易占满
+# mkdir -p /data/containerd
+# sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
+
+# 2. 修改 sandbox 镜像（国内环境推荐使用阿里云镜像）
+#    默认配置中 sandbox 位于 [plugins."io.containerd.cri.v1.images".pinned_images]
+#    版本通常为 3.10.1，可替换为阿里云镜像以加速拉取
+# sed -i 's|sandbox = .*|sandbox = "registry.aliyuncs.com/google_containers/pause:3.10.1"|' /etc/containerd/config.toml
+
+# 3. 配置国内镜像加速（解决 Docker Hub 拉取限速问题）
+#    注意：默认配置文件为 version = 3 格式，不再支持旧版的 mirrors 内联配置。
+#    必须使用 hosts.toml 方式配置（CRI 插件会自动读取 config_path 指定的目录）。
+#    执行以下命令直接生成配置：
+mkdir -p /etc/containerd/certs.d/docker.io
+cat > /etc/containerd/certs.d/docker.io/hosts.toml << EOF
+server = "https://registry-1.docker.io"
+
+[host."https://docker.1ms.run"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://dockerproxy.net"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://proxy.vvvv.ee"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://dockerproxy.link"]
+  capabilities = ["pull", "resolve"]
+EOF
+
+# 4. 验证镜像加速配置
+#    注意：ctr 是底层调试工具，默认不加载 CRI 镜像配置，必须手动指定 --hosts-dir 才能验证 hosts.toml。
+#    K8s (CRI) 会自动读取 config_path 目录，Pod 启动时会自动使用该代理，无需额外配置。
+#
+#    原理说明：
+#    - ctr 命令：直接与 containerd 交互，默认不加载 CRI 插件配置，需手动指定 hosts 目录。
+#    - K8s (crictl/kubelet)：通过 CRI 接口调用，containerd 的 CRI 插件会自动加载 config_path 配置，
+#      因此 Pod 启动时会自动使用加速镜像，无需任何额外操作。
+#
+#    验证步骤：
+#    1. 确保 config.toml 中开启了配置目录（通常默认已开启）：
+#       grep "config_path" /etc/containerd/config.toml
+#       # 输出应包含: config_path = "/etc/containerd/certs.d" 或类似路径
+#
+#    2. 重启 containerd 生效：
+#       systemctl restart containerd
+#
+#    3. 使用 ctr 指定目录验证代理连通性：
+#       ctr images pull --hosts-dir "/etc/containerd/certs.d" docker.io/library/alpine:latest
+# ──────────────────────────────────────────
+
+
+# 重新加载 systemd
+systemctl daemon-reload
 # 启动并启用 containerd
 systemctl enable --now containerd
 
