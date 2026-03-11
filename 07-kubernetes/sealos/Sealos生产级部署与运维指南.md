@@ -700,7 +700,13 @@ kubectl get svc
 ```bash
 # ── 所有系统通用 ──────────────────────────
 # 使用 Sealos 部署 Dashboard
-sealos run labring/sealos-dashboard:v5.0.0
+sealos run labring/sealos-dashboard:v5.1.1
+
+#
+# 说明：执行过程中可能会提示
+# Do you want to continue on 'k8s-node1' cluster? Input 'k8s-node1' to continue:
+# 会输出一行，按照提示输入即可
+
 
 # 或者使用 Helm 部署
 # 添加 Sealos Helm 仓库
@@ -753,10 +759,11 @@ kubectl expose deployment nginx-test \
 kubectl get pods -n test-namespace
 
 # 预期输出：
-# NAME                          READY   STATUS    RESTARTS   AGE
-# nginx-test-xxx-xxx            1/1     Running   0          30s
-# nginx-test-xxx-yyy            1/1     Running   0          30s
-# nginx-test-xxx-zzz            1/1     Running   0          30s
+NAME                          READY   STATUS              RESTARTS   AGE
+nginx-test-568599cf4d-cgwhv   1/1     Running             0          20s
+nginx-test-568599cf4d-l86tq   0/1     ContainerCreating   0          20s
+nginx-test-568599cf4d-wk5wr   1/1     Running             0          20s
+
 
 # 5. 验证服务端点
 kubectl get endpoints nginx-test -n test-namespace
