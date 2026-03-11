@@ -1,0 +1,272 @@
+# =============================================================================
+# Vagrantfile_7Nodes_FullHA - 全量高可用验证环境（3Master+3Worker+1存储节点）
+# =============================================================================
+# 适用场景：
+#   ✅ 完整生产级 K8s 高可用集群验证
+#   ✅ Rook-Ceph 分布式存储（存储节点提供 3 块裸盘）
+#   ✅ 同时运行 K8s + 可观测性套件 + CI/CD 的完整验证
+#   ✅ 服务网格 + 微服务架构完整场景验证
+#
+# 宿主机资源消耗（满配）：
+#   - 3 Master × 16GB + 3 Worker × 16GB + 1 存储 × 16GB = 112GB
+#   - CPU：7 节点 × 4核 = 28 核
+#   ⚠️  需要宿主机 ≥ 128GB 内存，这是本配置的设计上限
+#   ⚠️  如内存不足，可将 NODE_MEMORY 降低至 12288(12GB) 或 8192(8GB)
+#
+# 节点规划：
+#   k8s-master1: 192.168.36.101  (Control Plane + etcd)
+#   k8s-master2: 192.168.36.102  (Control Plane + etcd)
+#   k8s-master3: 192.168.36.103  (Control Plane + etcd)
+#   k8s-worker1: 192.168.36.111  (Workload)
+#   k8s-worker2: 192.168.36.112  (Workload)
+#   k8s-worker3: 192.168.36.113  (Workload，可兼任 Ceph OSD)
+#   storage1:    192.168.36.121  (专用存储节点，3 块裸盘)
+#
+# 使用方法：
+#   $env:VAGRANT_VAGRANTFILE = "Vagrantfile_7Nodes_FullHA"; vagrant up
+#
+# ⚡ 资源优化建议：
+#   - 不需要存储节点时：将 STORAGE_COUNT 改为 0
+#   - 不需要全量 Worker：将 WORKER_COUNT 改为 2
+#   - 内存不足时：将各节点 MEMORY 改为 12288
+# =============================================================================
+
+# ─── ★ 资源配置（按实际内存按需裁剪）──────────────────────────────────────────
+MASTER_COUNT  = 3
+WORKER_COUNT  = 3
+STORAGE_COUNT = 1    # 专用存储节点数量（0 = 不创建，Worker 兼任 Ceph OSD）
+
+MASTER_MEMORY  = 16384   # 16GB（etcd 对内存 I/O 敏感，建议保持）
+WORKER_MEMORY  = 16384   # 16GB（可降至 12288 节省内存）
+STORAGE_MEMORY = 16384   # 16GB（Ceph OSD 内存消耗大，不建议低于 8GB）
+
+MASTER_CPUS  = 4
+WORKER_CPUS  = 4
+STORAGE_CPUS = 4
+
+# IP 段：192.168.36.x（避免与其他 Vagrantfile 冲突）
+IP_BASE          = "192.168.36"
+MASTER_IP_START  = 101   # Master:  101-103
+WORKER_IP_START  = 111   # Worker:  111-113
+STORAGE_IP_START = 121   # Storage: 121
+
+# 磁盘
+DISK_MASTER_SIZE  = "60GB"
+DISK_WORKER_SIZE  = "80GB"
+DISK_STORAGE_SIZE = "40GB"    # 存储节点系统盘
+# ★ 存储节点裸盘（Ceph OSD 使用，不格式化）
+DISK_CEPH_SIZE  = "50GB"
+DISK_CEPH_COUNT = 3           # 每个存储节点 3 块裸盘（Ceph 推荐 >= 3 OSD）
+# Worker 附加数据盘（可选，兼任 Ceph OSD 时使用）
+DISK_WORKER_DATA_SIZE  = "20GB"
+DISK_WORKER_DATA_COUNT = 0    # 0 = 不添加（由专用存储节点提供存储）
+
+BOX_NAME = "rocky9"
+BOX_URL  = "file://D:\\VM\\box\\generic-rocky9.box"
+# BOX_URL = nil
+
+VM_PASSWORD = "123"
+# ─── 参数配置 END ─────────────────────────────────────────────────────────────
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = BOX_NAME
+  config.vm.box_url = BOX_URL unless BOX_URL.nil?
+  config.vm.box_check_update = false
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # Master 节点 × 3
+  # ══════════════════════════════════════════════════════════════════════════
+  (1..MASTER_COUNT).each do |i|
+    config.vm.define "k8s-master#{i}" do |node|
+      node.vm.hostname = "k8s-master#{i}"
+      node.vm.network "private_network",
+        ip: "#{IP_BASE}.#{MASTER_IP_START + i - 1}",
+        netmask: "255.255.255.0"
+      node.vm.disk :disk, size: DISK_MASTER_SIZE, primary: true
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+
+      node.vm.provider "virtualbox" do |v|
+        v.name   = "k8s-master#{i}"
+        v.memory = MASTER_MEMORY
+        v.cpus   = MASTER_CPUS
+        v.gui    = false
+        v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      end
+    end
+  end
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # Worker 节点 × 3
+  # ══════════════════════════════════════════════════════════════════════════
+  (1..WORKER_COUNT).each do |i|
+    config.vm.define "k8s-worker#{i}" do |node|
+      node.vm.hostname = "k8s-worker#{i}"
+      node.vm.network "private_network",
+        ip: "#{IP_BASE}.#{WORKER_IP_START + i - 1}",
+        netmask: "255.255.255.0"
+      node.vm.disk :disk, size: DISK_WORKER_SIZE, primary: true
+
+      # Worker 附加数据盘（当无专用存储节点时使用）
+      if DISK_WORKER_DATA_COUNT > 0
+        (1..DISK_WORKER_DATA_COUNT).each do |d|
+          node.vm.disk :disk,
+            size: DISK_WORKER_DATA_SIZE,
+            name: "k8s-worker#{i}_data_#{d}"
+        end
+      end
+
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+
+      node.vm.provider "virtualbox" do |v|
+        v.name   = "k8s-worker#{i}"
+        v.memory = WORKER_MEMORY
+        v.cpus   = WORKER_CPUS
+        v.gui    = false
+        v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      end
+    end
+  end
+
+  # ══════════════════════════════════════════════════════════════════════════
+  # 专用存储节点（Ceph OSD / MinIO 分布式）
+  # ══════════════════════════════════════════════════════════════════════════
+  (1..STORAGE_COUNT).each do |i|
+    config.vm.define "storage#{i}" do |node|
+      node.vm.hostname = "storage#{i}"
+      node.vm.network "private_network",
+        ip: "#{IP_BASE}.#{STORAGE_IP_START + i - 1}",
+        netmask: "255.255.255.0"
+      node.vm.disk :disk, size: DISK_STORAGE_SIZE, primary: true
+
+      # ★ 裸盘（Ceph OSD 专用，不格式化，不挂载分区）
+      # 在虚拟机内表现为 /dev/sdb, /dev/sdc, /dev/sdd
+      (1..DISK_CEPH_COUNT).each do |d|
+        node.vm.disk :disk,
+          size: DISK_CEPH_SIZE,
+          name: "storage#{i}_osd_#{d}"
+      end
+
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+
+      node.vm.provider "virtualbox" do |v|
+        v.name   = "storage#{i}"
+        v.memory = STORAGE_MEMORY
+        v.cpus   = STORAGE_CPUS
+        v.gui    = false
+        v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      end
+    end
+  end
+
+  # ── Provisioning（所有节点）────────────────────────────────────────────────
+  config.vm.provision "shell", run: "once", inline: <<-SHELL
+
+    echo ""
+    echo "==> [1/5] 系统基础配置（K8s + Ceph 专项）"
+    timedatectl set-timezone Asia/Shanghai
+    setenforce 0 2>/dev/null || true
+    sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+    swapoff -a
+    sed -ri 's/^(.+swap.+)$/#\\1/g' /etc/fstab
+    modprobe br_netfilter overlay ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack 2>/dev/null || true
+    cat > /etc/modules-load.d/k8s.conf << 'EOF'
+br_netfilter
+overlay
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack
+EOF
+    cat > /etc/sysctl.d/k8s.conf << 'EOF'
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+vm.swappiness = 0
+vm.overcommit_memory = 1
+fs.inotify.max_user_watches = 524288
+fs.file-max = 1048576
+net.netfilter.nf_conntrack_max = 1000000
+net.core.somaxconn = 65535
+EOF
+    sysctl --system >/dev/null 2>&1
+    cat > /etc/security/limits.d/k8s.conf << 'EOF'
+* soft nofile 1048576
+* hard nofile 1048576
+* soft nproc  65535
+* hard nproc  65535
+EOF
+    echo "    完成"
+
+    echo ""
+    echo "==> [2/5] 安装常用工具"
+    dnf install -y vim bash-completion net-tools wget curl tar \
+                   bind-utils lsof sysstat iotop htop git \
+                   socat conntrack ipset ipvsadm 2>/dev/null || true
+    echo "    完成"
+
+    echo ""
+    echo "==> [3/5] 配置 /etc/hosts（全量节点名称解析）"
+    sed -i '/k8s-master\|k8s-worker\|storage[0-9]/d' /etc/hosts
+    cat >> /etc/hosts << 'HOSTS'
+192.168.36.101 k8s-master1
+192.168.36.102 k8s-master2
+192.168.36.103 k8s-master3
+192.168.36.111 k8s-worker1
+192.168.36.112 k8s-worker2
+192.168.36.113 k8s-worker3
+192.168.36.121 storage1
+HOSTS
+    echo "    /etc/hosts 更新完成"
+
+    echo ""
+    echo "==> [4/5] ★ 修复 sshd / OpenSSL 版本不匹配"
+    dnf reinstall -y openssh openssh-server 2>/dev/null || \
+    dnf install   -y openssh openssh-server --allowerasing 2>/dev/null || true
+
+    echo ""
+    echo "==> [5/5] 配置 SSH 认证并重启 sshd"
+    sed -i 's/^#\?[[:space:]]*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/^#\?[[:space:]]*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    if [ -d /etc/ssh/sshd_config.d ]; then
+      cat > /etc/ssh/sshd_config.d/50-vagrant.conf << 'EOF'
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin yes
+EOF
+    fi
+    systemctl enable sshd
+    systemctl restart sshd
+    echo "vagrant:#{VM_PASSWORD}" | chpasswd
+    echo "root:#{VM_PASSWORD}"    | chpasswd
+
+    echo ""
+    echo "================================================================"
+    echo "  ✅ 全量 HA 节点初始化完成！"
+    echo "  Hostname  : $(hostname)"
+    MYIP=$(ip -4 addr show eth1 2>/dev/null | grep inet | awk '{print $2}' | head -1)
+    echo "  IP 地址   : ${MYIP}"
+    echo "  Root 密码 : #{VM_PASSWORD}"
+    echo ""
+    echo "  集群拓扑："
+    echo "    Master:  k8s-master1(101) k8s-master2(102) k8s-master3(103)"
+    echo "    Worker:  k8s-worker1(111) k8s-worker2(112) k8s-worker3(113)"
+    echo "    Storage: storage1(121) [3块裸盘: /dev/sdb /dev/sdc /dev/sdd]"
+    echo "================================================================"
+    echo ""
+  SHELL
+
+end

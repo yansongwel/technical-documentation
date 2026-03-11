@@ -1,0 +1,172 @@
+# =============================================================================
+# Vagrantfile_1Node - 单节点通用验证环境
+# =============================================================================
+# 适用场景：
+#   - 验证单机部署类文档（Nginx、Jenkins、Harbor、Nacos 等）
+#   - Docker / Docker Compose 快速启动验证
+#   - 不需要集群的中间件功能验证
+#
+# 宿主机资源要求：
+#   - 内存：≥ 12GB（给 VM 分配 8GB，预留 4GB 给 Windows）
+#   - CPU：≥ 4 核
+#
+# 使用方法：
+#   $env:VAGRANT_VAGRANTFILE = "Vagrantfile_1Node"; vagrant up
+#   $env:VAGRANT_VAGRANTFILE = "Vagrantfile_1Node"; vagrant ssh node1
+# =============================================================================
+
+# ─── ★ 参数配置（按需修改）────────────────────────────────────────────────────
+NODE_MEMORY = 8192    # 内存（MB），8192 = 8GB
+NODE_CPUS   = 4      # CPU 核数
+
+NODE_IP     = "192.168.33.10"   # ← 节点 IP，避免与其他 Vagrantfile 冲突
+
+# 磁盘大小（需安装 vagrant-disksize 插件）
+DISK_OS_SIZE = "60GB"    # 系统盘，单节点多装软件，建议大一点
+
+# Box 配置
+BOX_NAME = "rocky9"
+BOX_URL  = "file://D:\\VM\\box\\generic-rocky9.box"
+# BOX_URL = nil  # 已通过 vagrant box add 添加则注释此行
+
+# 共享目录（false = 禁用）
+SYNCED_ENABLED    = false
+SYNCED_HOST_PATH  = "C:\\Users\\yansongwei\\Downloads"
+SYNCED_GUEST_PATH = "/home/vagrant/Downloads"
+
+# 登录密码
+VM_PASSWORD = "123"
+# ─── 参数配置 END ─────────────────────────────────────────────────────────────
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = BOX_NAME
+  config.vm.box_url = BOX_URL unless BOX_URL.nil?
+  config.vm.box_check_update = false
+
+  # SSH 全局配置
+  # config.ssh.insert_key = false  # 多机共用 Vagrant 默认公钥时取消注释
+
+  config.vm.define "node1" do |node|
+    node.vm.hostname = "node1"
+
+    # ── 网络配置 ──────────────────────────────────────────────────────────────
+    # Host-Only 网络：宿主机可访问虚拟机，虚拟机可访问宿主机，外网不可访问
+    node.vm.network "private_network", ip: NODE_IP, netmask: "255.255.255.0"
+
+    # NAT 端口转发示例（按需取消注释）
+    # node.vm.network "forwarded_port", guest: 80,   host: 8080   # Nginx/Web
+    # node.vm.network "forwarded_port", guest: 8080, host: 8080   # Jenkins
+    # node.vm.network "forwarded_port", guest: 9090, host: 9090   # Prometheus
+    # node.vm.network "forwarded_port", guest: 3000, host: 3000   # Grafana
+    # node.vm.network "forwarded_port", guest: 443,  host: 8443   # HTTPS
+
+    # ── 磁盘配置 ──────────────────────────────────────────────────────────────
+    node.vm.disk :disk, size: DISK_OS_SIZE, primary: true
+
+    # ── 共享目录 ──────────────────────────────────────────────────────────────
+    node.vm.synced_folder SYNCED_HOST_PATH, SYNCED_GUEST_PATH,
+      disabled: !SYNCED_ENABLED
+    # node.vm.synced_folder ".", "/vagrant", disabled: true
+
+    # ── VirtualBox Provider ────────────────────────────────────────────────────
+    node.vm.provider "virtualbox" do |v|
+      v.name   = "node1"
+      v.memory = NODE_MEMORY
+      v.cpus   = NODE_CPUS
+      v.gui    = false
+
+      # 图形控制器
+      v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+      # 多 CPU 必须开启 I/O APIC
+      v.customize ["modifyvm", :id, "--ioapic", "on"]
+      # 半虚拟化（kvm 提升 Linux 性能）
+      v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+      # DNS 在宿主机解析（解决虚拟机 DNS 慢）
+      v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+      v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+    end
+  end
+
+  # ── Provisioning ─────────────────────────────────────────────────────────────
+  config.vm.provision "shell", run: "once", inline: <<-SHELL
+    # ⚠️  不使用 set -e，避免 reinstall 等命令非零退出码中断脚本
+
+    echo ""
+    echo "==> [1/5] 系统基础配置"
+    timedatectl set-timezone Asia/Shanghai
+    setenforce 0 2>/dev/null || true
+    sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+    swapoff -a
+    sed -ri 's/^(.+swap.+)$/#\\1/g' /etc/fstab
+    tee /etc/sysctl.d/base.conf > /dev/null << 'EOF'
+net.ipv4.ip_forward = 1
+vm.swappiness = 0
+fs.file-max = 524288
+fs.inotify.max_user_watches = 524288
+EOF
+    sysctl --system >/dev/null 2>&1
+    echo "    完成"
+
+    echo ""
+    echo "==> [2/5] 安装常用工具"
+    dnf install -y vim bash-completion net-tools wget curl tar \
+                   bind-utils lsof sysstat iotop htop git 2>/dev/null || true
+    echo "    完成"
+
+    echo ""
+    echo "==> [3/5] 安装 Docker（单节点验证常用）"
+    # 如不需要 Docker，注释此步骤
+    dnf install -y yum-utils 2>/dev/null || true
+    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo 2>/dev/null || true
+    dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>/dev/null || true
+    systemctl enable --now docker 2>/dev/null || true
+
+    # 配置 Docker 镜像加速
+    mkdir -p /etc/docker
+    cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://dockerproxy.net"
+  ],
+  "log-driver": "json-file",
+  "log-opts": {"max-size": "100m", "max-file": "3"}
+}
+EOF
+    systemctl restart docker 2>/dev/null || true
+    echo "    Docker 安装完成"
+
+    echo ""
+    echo "==> [4/5] ★ 修复 sshd / OpenSSL 版本不匹配"
+    dnf reinstall -y openssh openssh-server 2>/dev/null || \
+    dnf install   -y openssh openssh-server --allowerasing 2>/dev/null || true
+
+    echo ""
+    echo "==> [5/5] 配置 SSH 认证并重启 sshd"
+    sed -i 's/^#\?[[:space:]]*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/^#\?[[:space:]]*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    if [ -d /etc/ssh/sshd_config.d ]; then
+      cat > /etc/ssh/sshd_config.d/50-vagrant.conf << 'EOF'
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin yes
+EOF
+    fi
+    systemctl enable sshd
+    systemctl restart sshd
+    echo "vagrant:#{VM_PASSWORD}" | chpasswd
+    echo "root:#{VM_PASSWORD}"    | chpasswd
+
+    echo ""
+    echo "================================================================"
+    echo "  ✅ 单节点初始化完成！"
+    echo "  Hostname  : $(hostname)"
+    echo "  IP 地址   : #{NODE_IP}"
+    echo "  Root 密码 : #{VM_PASSWORD}"
+    echo "  Docker    : $(docker --version 2>/dev/null || echo '未安装')"
+    echo "================================================================"
+    echo ""
+  SHELL
+
+end

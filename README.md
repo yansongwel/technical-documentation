@@ -28,7 +28,7 @@
 | 12 | [⚖️ 负载均衡 & 高可用](#️-12--负载均衡--高可用) | HAProxy · Keepalived · LVS |
 | 13 | [⏰ 任务调度](#-13--任务调度) | Airflow · XXL-Job · Elastic-Job |
 | 14 | [🔗 网络 & VPN](#-14--网络--vpn) | WireGuard · OpenVPN · Calico · Cilium |
-| 15 | [⚙️ IaC & 配置管理](#️-15--iac--配置管理) | Ansible · SaltStack · Terraform |
+| 15 | [⚙️ IaC & 配置管理](#️-15--iac--配置管理) | Ansible · SaltStack · Terraform · **Vagrant** |
 | 16 | [🛠️ 语言运行环境](#️-16--语言运行环境) | Python · Go · PHP · Java · Node.js |
 
 ---
@@ -42,6 +42,7 @@
 - ✅ **详细注释**：配置文件提供完整中文注释
 - ✅ **架构图示**：每个组件包含架构图与部署拓扑
 - ✅ **全面覆盖**：覆盖 SRE 涉及的 80+ 主流开源中间件
+- ✅ **本地验证**：配套 Vagrant 模板，在本地 Windows 多节点 VM 中验证文档正确性
 
 ---
 
@@ -228,7 +229,16 @@ technical-documentation/
 ├── 📂 15-iac/                    # IaC & 配置管理
 │   ├── ansible/                  # Agentless 自动化运维
 │   ├── saltstack/                # 大规模配置管理
-│   └── terraform/                # 基础设施即代码
+│   ├── terraform/                # 基础设施即代码
+│   └── vagrant/                  # 本地多节点 VM 快速验证环境
+│       ├── Vagrant使用指南.md
+│       └── 启动示例文件/
+│           ├── Vagrantfile_Rocky9      # Rocky9 单机模板（旧）
+│           ├── Vagrantfile_Ubuntu24    # Ubuntu24 单机模板（旧）
+│           ├── Vagrantfile_1Node       # 单节点通用模板（含 Docker）
+│           ├── Vagrantfile_3Nodes_DB   # 3 节点数据库集群模板
+│           ├── Vagrantfile_5Nodes_K8s  # 3Master+2Worker K8s 模板
+│           └── Vagrantfile_7Nodes_FullHA # 3M+3W+1存储 全量 HA 模板
 │
 └── 📂 16-runtime-env/            # 语言运行环境
     ├── python/                   # Python 多版本环境
@@ -454,6 +464,39 @@ technical-documentation/
 | **Ansible** | Agentless 自动化运维，Playbook 管理 | [📄 文档](./15-iac/ansible/) |
 | **SaltStack** | 大规模节点配置管理与远程执行 | [📄 文档](./15-iac/saltstack/) |
 | **Terraform** | 基础设施即代码，多云资源管理 | [📄 文档](./15-iac/terraform/) |
+| **Vagrant** | 本地多节点 VM 快速验证环境 | [📄 使用指南](./15-iac/vagrant/Vagrant使用指南.md) |
+
+---
+
+### 🧪 本地验证环境（Vagrant）
+
+> 本文档库的文档均将在本地 VM 中验证后再交付，确保零错误。以下 Vagrantfile 均基于 **Rocky Linux 9**。
+
+| Vagrantfile | 适用场景 | 节点 | 内存消耗 | IP 段 |
+|-------------|---------|--------|---------|-------|
+| [Vagrantfile_1Node](./15-iac/vagrant/启动示例文件/Vagrantfile_1Node) | Docker/单机部署类（Nginx/Jenkins/Harbor） | 1 | 8 GB | 192.168.33.10 |
+| [Vagrantfile_3Nodes_DB](./15-iac/vagrant/启动示例文件/Vagrantfile_3Nodes_DB) | 数据库集群（MySQL/Redis/MongoDB/ES/Kafka） | 3 | 3×16 = 48 GB | 192.168.34.101-103 |
+| [Vagrantfile_5Nodes_K8s](./15-iac/vagrant/启动示例文件/Vagrantfile_5Nodes_K8s) | K8s 集群（Sealos/kubeadm/kubeasz） | 5（3M+2W） | 5×16 = 80 GB | 192.168.35.101/111 |
+| [Vagrantfile_7Nodes_FullHA](./15-iac/vagrant/启动示例文件/Vagrantfile_7Nodes_FullHA) | 全量 HA（K8s+Ceph存储） | 7（3M+3W+1S） | 7×16 ≈ 112 GB | 192.168.36.101/111/121 |
+
+**快速启动（PowerShell）**：
+
+```powershell
+# 进入工作目录
+cd D:\YOUR_PROJECT
+
+# 指定 Vagrantfile 名称启动
+$env:VAGRANT_VAGRANTFILE = "Vagrantfile_3Nodes_DB"
+vagrant up
+
+# 登录节点
+vagrant ssh db-node1
+
+# 关闭所有虚拟机
+vagrant halt
+```
+
+> 📤 详细用法参考：📄 [倍者详细指南](./15-iac/vagrant/Vagrant使用指南.md)
 
 ---
 

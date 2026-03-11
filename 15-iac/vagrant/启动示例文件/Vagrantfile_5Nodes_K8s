@@ -1,0 +1,224 @@
+# =============================================================================
+# Vagrantfile_5Nodes_K8s - Kubernetes 集群验证环境（3Master + 2Worker）
+# =============================================================================
+# 适用场景：
+#   ✅ Kubernetes 集群部署（kubeadm / Sealos / kubeasz）
+#   ✅ K8s 存储插件验证（Longhorn / NFS / Rook-Ceph 小规模）
+#   ✅ 服务网格（Istio / Linkerd）
+#   ✅ CI/CD 平台（Jenkins / ArgoCD / Tekton）
+#   ✅ 可观测性套件（Prometheus + Grafana + Loki）
+#
+# 宿主机资源消耗：
+#   - 3 Master × 16GB + 2 Worker × 16GB = 80GB
+#   - CPU：5 节点 × 4核 = 20 核
+#   ⚠️  宿主机需要 ≥ 96GB 内存（留 16GB 给 Windows）
+#
+# 节点规划：
+#   k8s-master1: 192.168.35.101  (Control Plane)
+#   k8s-master2: 192.168.35.102  (Control Plane)
+#   k8s-master3: 192.168.35.103  (Control Plane)
+#   k8s-worker1: 192.168.35.111  (Workload)
+#   k8s-worker2: 192.168.35.112  (Workload)
+#
+# 使用方法：
+#   $env:VAGRANT_VAGRANTFILE = "Vagrantfile_5Nodes_K8s"; vagrant up
+#   $env:VAGRANT_VAGRANTFILE = "Vagrantfile_5Nodes_K8s"; vagrant ssh k8s-master1
+# =============================================================================
+
+# ─── ★ 拓扑配置 ───────────────────────────────────────────────────────────────
+MASTER_COUNT  = 3
+WORKER_COUNT  = 2
+MASTER_MEMORY = 16384    # Master 节点内存（etcd 建议 >= 16GB）
+WORKER_MEMORY = 16384    # Worker 节点内存（按实际工作负载调整）
+MASTER_CPUS   = 4
+WORKER_CPUS   = 4
+
+# IP 段：192.168.35.x（Master: 101-103，Worker: 111-112）
+IP_BASE         = "192.168.35"
+MASTER_IP_START = 101    # Master 从 101 开始
+WORKER_IP_START = 111    # Worker 从 111 开始（便于区分）
+
+# 磁盘
+DISK_MASTER_SIZE = "60GB"    # Master 系统盘（etcd 数据存储在此）
+DISK_WORKER_SIZE = "80GB"    # Worker 系统盘（容器镜像和日志存储在此）
+# Worker 附加数据盘（Rook-Ceph / Longhorn 需要裸盘）
+DISK_WORKER_DATA_SIZE  = "20GB"
+DISK_WORKER_DATA_COUNT = 1   # 0 = 不添加数据盘
+
+BOX_NAME = "rocky9"
+BOX_URL  = "file://D:\\VM\\box\\generic-rocky9.box"
+# BOX_URL = nil
+
+VM_PASSWORD = "123"
+# ─── 参数配置 END ─────────────────────────────────────────────────────────────
+
+Vagrant.configure("2") do |config|
+
+  config.vm.box = BOX_NAME
+  config.vm.box_url = BOX_URL unless BOX_URL.nil?
+  config.vm.box_check_update = false
+
+  # ── Master 节点 ────────────────────────────────────────────────────────────
+  (1..MASTER_COUNT).each do |i|
+    config.vm.define "k8s-master#{i}" do |node|
+      node.vm.hostname = "k8s-master#{i}"
+
+      node.vm.network "private_network",
+        ip: "#{IP_BASE}.#{MASTER_IP_START + i - 1}",
+        netmask: "255.255.255.0"
+
+      node.vm.disk :disk, size: DISK_MASTER_SIZE, primary: true
+      # Master 不需要数据盘（etcd 在系统盘）
+
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+
+      node.vm.provider "virtualbox" do |v|
+        v.name   = "k8s-master#{i}"
+        v.memory = MASTER_MEMORY
+        v.cpus   = MASTER_CPUS
+        v.gui    = false
+        v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      end
+    end
+  end
+
+  # ── Worker 节点 ────────────────────────────────────────────────────────────
+  (1..WORKER_COUNT).each do |i|
+    config.vm.define "k8s-worker#{i}" do |node|
+      node.vm.hostname = "k8s-worker#{i}"
+
+      node.vm.network "private_network",
+        ip: "#{IP_BASE}.#{WORKER_IP_START + i - 1}",
+        netmask: "255.255.255.0"
+
+      node.vm.disk :disk, size: DISK_WORKER_SIZE, primary: true
+
+      # ★ Worker 附加数据盘（Rook-Ceph / Longhorn 需要裸盘，cratch 无需格式化）
+      if DISK_WORKER_DATA_COUNT > 0
+        (1..DISK_WORKER_DATA_COUNT).each do |d|
+          node.vm.disk :disk,
+            size: DISK_WORKER_DATA_SIZE,
+            name: "k8s-worker#{i}_data_#{d}"
+        end
+      end
+
+      node.vm.synced_folder ".", "/vagrant", disabled: true
+
+      node.vm.provider "virtualbox" do |v|
+        v.name   = "k8s-worker#{i}"
+        v.memory = WORKER_MEMORY
+        v.cpus   = WORKER_CPUS
+        v.gui    = false
+        v.customize ["modifyvm", :id, "--graphicscontroller", "vmsvga"]
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
+      end
+    end
+  end
+
+  # ── Provisioning（所有节点执行）───────────────────────────────────────────
+  config.vm.provision "shell", run: "once", inline: <<-SHELL
+
+    echo ""
+    echo "==> [1/5] 系统基础配置（K8s 专项）"
+    timedatectl set-timezone Asia/Shanghai
+    # 关闭 SELinux（K8s 要求）
+    setenforce 0 2>/dev/null || true
+    sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+    # 关闭 Swap
+    swapoff -a
+    sed -ri 's/^(.+swap.+)$/#\\1/g' /etc/fstab
+
+    # 加载 K8s 必要内核模块
+    modprobe br_netfilter overlay ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack 2>/dev/null || true
+    cat > /etc/modules-load.d/k8s.conf << 'EOF'
+br_netfilter
+overlay
+ip_vs
+ip_vs_rr
+ip_vs_wrr
+ip_vs_sh
+nf_conntrack
+EOF
+
+    # K8s 内核参数
+    cat > /etc/sysctl.d/k8s.conf << 'EOF'
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+vm.swappiness = 0
+vm.overcommit_memory = 1
+fs.inotify.max_user_watches = 524288
+fs.file-max = 1048576
+net.netfilter.nf_conntrack_max = 1000000
+net.core.somaxconn = 65535
+EOF
+    sysctl --system >/dev/null 2>&1
+    echo "    完成"
+
+    echo ""
+    echo "==> [2/5] 安装常用工具"
+    dnf install -y vim bash-completion net-tools wget curl tar \
+                   bind-utils lsof sysstat iotop htop git \
+                   socat conntrack ipset ipvsadm 2>/dev/null || true
+    echo "    完成"
+
+    echo ""
+    echo "==> [3/5] 配置 /etc/hosts（K8s 集群节点名称解析）"
+    sed -i '/k8s-master\|k8s-worker/d' /etc/hosts
+    cat >> /etc/hosts << 'HOSTS'
+192.168.35.101 k8s-master1
+192.168.35.102 k8s-master2
+192.168.35.103 k8s-master3
+192.168.35.111 k8s-worker1
+192.168.35.112 k8s-worker2
+HOSTS
+    echo "    /etc/hosts 更新完成"
+
+    echo ""
+    echo "==> [4/5] ★ 修复 sshd / OpenSSL 版本不匹配"
+    dnf reinstall -y openssh openssh-server 2>/dev/null || \
+    dnf install   -y openssh openssh-server --allowerasing 2>/dev/null || true
+
+    echo ""
+    echo "==> [5/5] 配置 SSH 认证并重启 sshd"
+    sed -i 's/^#\?[[:space:]]*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/^#\?[[:space:]]*PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    if [ -d /etc/ssh/sshd_config.d ]; then
+      cat > /etc/ssh/sshd_config.d/50-vagrant.conf << 'EOF'
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin yes
+EOF
+    fi
+    systemctl enable sshd
+    systemctl restart sshd
+    echo "vagrant:#{VM_PASSWORD}" | chpasswd
+    echo "root:#{VM_PASSWORD}"    | chpasswd
+
+    echo ""
+    echo "================================================================"
+    echo "  ✅ K8s 节点初始化完成！"
+    echo "  Hostname  : $(hostname)"
+    MYIP=$(ip -4 addr show eth1 2>/dev/null | grep inet | awk '{print $2}' | head -1)
+    echo "  IP 地址   : ${MYIP}"
+    echo "  Root 密码 : #{VM_PASSWORD}"
+    echo ""
+    echo "  集群节点："
+    echo "    Master: k8s-master1(101) k8s-master2(102) k8s-master3(103)"
+    echo "    Worker: k8s-worker1(111) k8s-worker2(112)"
+    echo ""
+    echo "  下一步（在 k8s-master1 上执行）："
+    echo "    使用 Sealos: sealos apply -f Clusterfile"
+    echo "    使用 kubeadm: kubeadm init ..."
+    echo "================================================================"
+    echo ""
+  SHELL
+
+end

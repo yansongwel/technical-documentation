@@ -654,13 +654,10 @@ ctr version
 #### 4.3.2 安装 Sealos
 
 ```bash
-# ── Ubuntu 22.04 ───────────────────────────
-# 下载 Sealos 二进制文件
+# ── Ubuntu 22.04（与 Rocky9 相同，通用步骤）──────────────
+# 下载 Sealos 二进制文件（推荐：直接下载，更稳定可靠）
 SEALOS_VERSION="5.1.1"  # ← 根据需要修改版本
-curl -sfL https://raw.githubusercontent.com/labring/sealos/main/scripts/install.sh \
-  | sh -s v${SEALOS_VERSION} labring/sealos:${SEALOS_VERSION}
 
-# 或直接下载二进制
 wget https://github.com/labring/sealos/releases/download/v${SEALOS_VERSION}/sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
 tar -zxvf sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
 mv sealos /usr/local/bin/
@@ -670,142 +667,237 @@ chmod +x /usr/local/bin/sealos
 sealos version
 ```
 
+解压包内文件说明：
+
+- `sealos`：Sealos 主命令，负责集群创建/扩容/升级/应用交付等核心能力（实际运行时主要用它）
+- `sealctl`：Sealos 辅助管理工具，常用于集群运维/诊断类的配套命令（按需使用）
+- `lvscare`：Sealos 组件之一，用于在集群中提供/维护 LVS 相关能力（通常作为组件随集群使用，不必单独手工执行）
+- `image-cri-shim`：镜像相关的 CRI 适配组件，用于与容器运行时/CRI 交互的场景（通常随 Sealos 流程或组件使用）
+- `README.md`：当前版本的发行包说明、用法提示与变更信息
+
 ### 4.4 集群初始化与配置
 
-#### 4.4.1 配置 Sealos 集群配置文件
+#### 4.4.1 配置 Sealos 集群配置文件（Clusterfile）
 
-在 **Master-01** 节点上创建集群配置文件：
+> ⚠️ **重要**：Sealos v5 使用全新的 API `apps.sealos.io/v1beta1`，配置文件格式与 v4 完全不同。本节内容基于 **v5.1.1 实际输出**，请勿使用旧文档或网络上的旧格式。
+
+在 **Master-01** 节点上创建工作目录并生成集群配置文件：
 
 ```bash
 # ── 所有系统通用 ──────────────────────────
-# 创建集群配置文件
-cat >> /root/sealos/ClusterConfig << 'EOF'
-apiVersion: sealos.io/v1beta1
+mkdir -p /root/sealos
+cd /root/sealos
+
+# ── 步骤一：用 sealos gen 生成基础 Clusterfile（推荐）──────────
+# sealos gen 会根据你的镜像列表和节点信息生成完整的多文档 YAML
+# 生成后再手动调整 certSANs、Pod 网段等参数
+sealos gen \
+  labring/kubernetes:v1.28.0 \
+  labring/helm:v3.12.0 \
+  labring/calico:v3.26.1 \
+  --masters 192.168.33.100,192.168.33.101,192.168.33.102 \
+  --nodes   192.168.33.103,192.168.33.104,192.168.33.105 \
+  --passwd  'YourStrongPassword' \
+  --output  Clusterfile
+
+# 生成完成后查看文件（共 5 个 YAML 文档）
+cat Clusterfile
+```
+
+**完整 Clusterfile 说明（基于 sealos gen 实际输出，含生产调优注释）**：
+
+```yaml
+# ═══════════════════════════════════════════════════════════
+# 文档 1/5：Cluster（Sealos 自有资源，定义集群整体）
+# ═══════════════════════════════════════════════════════════
+apiVersion: apps.sealos.io/v1beta1   # ★ v5 固定 API 版本，不可改为 sealos.io/v1beta1
 kind: Cluster
 metadata:
-  name: sealos-prod
-  namespace: default
+  name: default                       # 集群名称，sealos status 等命令会用到
 spec:
-  # ★ 集群唯一标识（根据实际环境修改）
-  clusterID: prod-cluster-001
+  # ★ 镜像列表（Sealos 会按顺序加载）
+  # 可到 https://hub.sealos.io 或 https://explore.ggcr.dev 查询可用版本
+  image:
+    - labring/kubernetes:v1.28.0   # ★ K8s 核心组件（含 kubelet/kubeadm/kubectl/containerd）
+    - labring/helm:v3.12.0         # ★ Helm 包管理器
+    - labring/calico:v3.26.1       # ★ CNI 网络插件（也可替换为 cilium/flannel）
 
-  # Kubernetes 版本
-  image: labring/kubernetes:v1.29.0
-
-  # ★ 虚拟 IP 地址（根据实际网络规划修改）
-  vip: 192.168.1.9
-
-  # SSH 用户和端口（⚠️ 根据实际环境修改）
+  # ★ SSH 认证配置（Sealos 通过 SSH 管理所有节点，无需预先安装 Agent）
   ssh:
-    user: root
-    passwd: "YourSSHPassword123"  # ← ⚠️ 生产环境建议使用密钥认证
-    pk: /root/.ssh/id_rsa
+    passwd: 'YourStrongPassword'   # ⚠️ 生产环境建议改用私钥认证
+    pk: /root/.ssh/id_rsa          # ← 若用私钥，取消此行注释，注释 passwd
+    # pkPasswd: ''                 # 私钥密码（如有）
+    port: 22                       # SSH 端口，可按需修改
 
-  # Master 节点列表（★ 根据实际节点 IP 修改）
-  masters:
-    - 192.168.1.20
-    - 192.168.1.21
-    - 192.168.1.22
+  # ★ 节点规划（v5 格式：hosts 数组 + roles，不再是 masters/nodes 并列字段）
+  hosts:
+    - roles: [master, amd64]       # master = control-plane；amd64 为架构标签
+      ips:
+        - 192.168.33.100:22        # ← 根据实际 IP 修改，格式 IP:Port
+        - 192.168.33.101:22
+        - 192.168.33.102:22
+    - roles: [node, amd64]         # node = worker
+      ips:
+        - 192.168.33.103:22
+        - 192.168.33.104:22
+        - 192.168.33.105:22
 
-  # Worker 节点列表（★ 根据实际节点 IP 修改）
-  nodes:
-    - 192.168.1.30
-    - 192.168.1.31
-    - 192.168.1.32
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 2/5：InitConfiguration（kubeadm 初始化配置）
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: 192.168.33.100   # ★ 第一个 Master 的实际 IP（由 sealos gen 自动填充）
+  bindPort: 6443
+nodeRegistration:
+  kubeletExtraArgs:
+    node-ip: 192.168.33.100          # ★ 与 advertiseAddress 保持一致
+  taints: null                        # 去掉 master 节点的 NoSchedule 污点（单机或测试时有用）
 
-  # 网络插件配置
-  network:
-    # CNI 插件选择（calico/flannel/cilium）
-    cni: calico
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 3/5：ClusterConfiguration（kubeadm 集群配置）
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: v1.28.0
+# ★ 高可用 VIP 域名（Sealos 会自动配置 lvscare 负载均衡，无需外部 LB）
+# 访问 API Server 统一使用此域名，sealos 会把它写入 /etc/hosts
+controlPlaneEndpoint: apiserver.cluster.local:6443
 
-    # ★ Pod 网段（⚠️ 避免与现有网络冲突）
-    podCIDR: 100.64.0.0/10
+networking:
+  podSubnet: 100.64.0.0/10           # ★ Pod 网段，避免与物理网络冲突
+  serviceSubnet: 10.96.0.0/22        # ★ Service 网段
 
-    # ★ Service 网段
-    svcCIDR: 10.96.0.0/12
+apiServer:
+  # ★ 证书 SAN：API Server 证书中的额外域名/IP，客户端通过这些地址访问需提前配置
+  certSANs:
+    - 127.0.0.1
+    - apiserver.cluster.local         # sealos 内部 VIP 域名（必须保留）
+    - 10.103.97.2                     # ← sealos 自动分配的 Service CIDR 首地址（保留）
+    - 192.168.33.100                  # ← Master1 实际 IP
+    - 192.168.33.101                  # ← Master2 实际 IP
+    - 192.168.33.102                  # ← Master3 实际 IP
+    # 可按需追加访问域名：
+    # - k8s.example.com
+    # - 192.168.33.200                # 如有外部 LB VIP，也加进来
+  extraArgs:
+    # 审计日志（生产必开）
+    audit-log-format: json
+    audit-log-maxage: "7"
+    audit-log-maxbackup: "10"
+    audit-log-maxsize: "100"
+    audit-log-path: /var/log/kubernetes/audit.log
+    audit-policy-file: /etc/kubernetes/audit-policy.yml
+    enable-aggregator-routing: "true"
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/kubernetes
+      mountPath: /etc/kubernetes
+      name: audit
+      pathType: DirectoryOrCreate
+    - hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      name: audit-log
+      pathType: DirectoryOrCreate
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
 
-    # Calico 特定配置（网络通信模式选型）
-    # ⚠️ 请根据您的实际网络环境选择以下三种模式之一：
-    calico:
-      # 【选项 1】VXLAN 模式（强烈推荐，云环境/复杂网络首选）
-      # - 特点：兼容性最好，不依赖底层路由，使用 UDP 封装。不会被云平台（如阿里云/AWS）拦截。
-      # - 适用：公有云环境、不能保证 BGP 畅通的本地机房。
-      ipip: "Never"
-      vxlan: "Always"
-      mode: "VXLAN"
-      
-      # 【选项 2】纯 BGP 模式（性能最高）
-      # - 特点：不封装协议，网络损耗极小（接近原生）。
-      # - 适用：本地物理机房（所有节点在同二层子网）；或底层网络已配置支持 BGP。
-      # ipip: "Never"
-      # vxlan: "Never"
-      # mode: "BGP"
-      
-      # 【选项 3】BGP + IPIP 模式（传统模式）
-      # - 特点：同网段走 BGP，跨网段用 IPIP 封装。
-      # - 注意：部分防火墙/云环境默认拦截 IPIP 协议，会导致跨节点 Pod 不互通。
-      # ipip: "Always"  # 或 "CrossSubnet"
-      # vxlan: "Never"
-      # mode: "BGP"
+controllerManager:
+  extraArgs:
+    bind-address: 0.0.0.0
+    # ★ 证书有效期延长至 10 年（默认 1 年，生产环境推荐延长）
+    cluster-signing-duration: 876000h
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
 
-  # 容器运行时
-  containerRuntime:
-    type: containerd
+scheduler:
+  extraArgs:
+    bind-address: 0.0.0.0
+    feature-gates: ""
+  extraVolumes:
+    - hostPath: /etc/localtime
+      mountPath: /etc/localtime
+      name: localtime
+      pathType: File
+      readOnly: true
 
-  # etcd 配置
-  etcd:
-    # 数据目录
-    dataDir: /var/lib/etcd
-
-  # API Server 配置
-  apiServer:
-    # ★ 访问控制（⚠️ 生产环境必须修改）
-    authorizationMode: "Node,RBAC"
-
-    # ★ 服务客户端证书（⚠️ 根据实际域名修改）
-    # 注意：certSANs 只能配置在 apiServer 下，不可配置在根级或 kubelet 下
-    certSANs:
-      - "sealos.example.com"    # ← 根据实际域名修改
-      - "*.sealos.example.com"  # ← 泛域名支持
-      - "192.168.1.9"
-      - "192.168.1.20"
-      - "192.168.1.21"
-      - "192.168.1.22"
-
-    # 额外参数
+etcd:
+  local:
+    dataDir: ""                       # 留空使用默认 /var/lib/etcd
     extraArgs:
-      # 启用审计日志
-      audit-log-path: "/var/log/kubernetes/audit.log"
-      audit-log-maxage: "30"
-      audit-log-maxbackup: "10"
-      # 限制请求大小
-      max-request-size: "3145728"
+      listen-metrics-urls: http://0.0.0.0:2381   # 暴露 metrics 给 Prometheus
 
-  # Controller Manager 配置
-  controllerManager:
-    extraArgs:
-      # POD 数量
-      cluster-cidr: "100.64.0.0/10"
-      service-cluster-ip-range: "10.96.0.0/12"
+dns: {}
 
-  # Scheduler 配置
-  scheduler:
-    extraArgs: {}
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 4/5：KubeProxyConfiguration
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+# ★ 代理模式：ipvs（生产推荐，性能优于 iptables）
+mode: ipvs
+ipvs:
+  # ★ 排除 VIP Service IP（避免 ipvs 规则干扰 sealos 内部通信）
+  excludeCIDRs:
+    - 10.103.97.2/32                  # ← 与 certSANs 中的 Service IP 保持一致
+  strictARP: false
+  syncPeriod: 30s
+conntrack:
+  maxPerCore: 32768
+  min: 131072
+  tcpEstablishedTimeout: 24h0m0s
+  tcpCloseWaitTimeout: 1h0m0s
+metricsBindAddress: 0.0.0.0:10249
+healthzBindAddress: 0.0.0.0:10256
+bindAddress: 0.0.0.0
 
-  # Kubelet 配置
-  kubelet:
-    # ★ 数据目录（建议使用大容量磁盘）
-    rootDir: /var/lib/kubelet
-
-    # 额外参数
-    extraArgs:
-      # Pod 清理策略
-      pod-eviction-timeout: "2m"
-      # 镜像拉取超时
-      serialize-image-pulls: "false"
+---
+# ═══════════════════════════════════════════════════════════
+# 文档 5/5：KubeletConfiguration
+# ═══════════════════════════════════════════════════════════
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+# ★ cgroup 驱动（需与 containerd 的 SystemdCgroup=true 保持一致）
+cgroupDriver: systemd
+containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+# ★ 最大 Pod 数（根据节点配置调整，默认 110）
+maxPods: 110
+# ★ 驱逐阈值（生产环境防止节点资源耗尽）
+evictionHard:
+  imagefs.available: 10%
+  memory.available: 100Mi
+  nodefs.available: 10%
+  nodefs.inodesFree: 5%
+# 日志保留
+containerLogMaxFiles: 5
+containerLogMaxSize: 10Mi
+# 提高 API 请求限速（高并发集群）
+kubeAPIBurst: 100
+kubeAPIQPS: 50
+registryBurst: 100
+registryPullQPS: 50
+# 证书自动轮换
+rotateCertificates: true
+# 并发拉镜像（加快 Pod 启动）
+serializeImagePulls: false
+```
 
 EOF
 ```
+
+
 
 #### 4.4.2 初始化集群
 
@@ -813,25 +905,45 @@ EOF
 
 ```bash
 # ── 所有系统通用 ──────────────────────────
-# 创建必要目录
 mkdir -p /root/sealos
 cd /root/sealos
 
-# 确保 SSH 免密登录已配置（⚠️ 重要）
-# 方式一：密码认证（已在配置文件中设置）
-# 方式二：密钥认证（推荐）
-ssh-copy-id root@192.168.1.20
-ssh-copy-id root@192.168.1.21
-ssh-copy-id root@192.168.1.22
-ssh-copy-id root@192.168.1.30
-ssh-copy-id root@192.168.1.31
-ssh-copy-id root@192.168.1.32
+# ── SSH 认证说明 ───────────────────────────
+# Sealos v5 会自动通过 Clusterfile 中的 ssh.passwd 或 ssh.pk 登录所有节点，
+# 无需提前手动执行 ssh-copy-id。
+#
+# 方式一（密码认证，已在 Clusterfile 中设置）：
+#   ssh.passwd 填好后，直接 sealos apply 即可，Sealos 会自动分发公钥
+#
+# 方式二（私钥认证，推荐生产环境）：
+#   前提：执行机（Master-01）的 ~/.ssh/id_rsa 已存在
+#   Clusterfile 中注释 passwd，启用 pk 字段即可
+#   ssh-keygen -t rsa -b 4096 -C "sealos" -f ~/.ssh/id_rsa -N ""   # 若没有则生成
 
-# 使用 Sealos 初始化集群（Sealos v5 使用 apply/run，不再支持 init）
+# ── 步骤一：先进行网络连通性验证 ────────────
+# 验证从 Master-01 能到其他节点的 SSH（避免防火墙/密码问题导致 apply 中途失败）
+ssh root@192.168.33.101 "hostname"
+ssh root@192.168.33.102 "hostname"
+ssh root@192.168.33.103 "hostname"
+
+# ── 步骤二：执行集群初始化 ──────────────────
+# Sealos v5 使用 apply 命令，不再支持旧版的 init
 sealos apply -f Clusterfile
 
 # 集群初始化时间约 5-10 分钟，请耐心等待
+# 出现 "succeeded" 或 kubectl get nodes 全部 Ready 即为成功
+
+# ── 快速部署（单命令，不使用 Clusterfile）────
+# 如果不需要自定义配置，也可以用 sealos run 一行命令完成部署
+# sealos run \
+#   labring/kubernetes:v1.28.0 \
+#   labring/helm:v3.12.0 \
+#   labring/calico:v3.26.1 \
+#   --masters 192.168.33.100,192.168.33.101,192.168.33.102 \
+#   --nodes   192.168.33.103,192.168.33.104,192.168.33.105 \
+#   --passwd  'YourStrongPassword'
 ```
+
 
 #### 4.4.3 验证集群状态
 
