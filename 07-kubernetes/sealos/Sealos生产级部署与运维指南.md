@@ -6,7 +6,7 @@ updated: 2026-03-11
 version: v1
 -----------
 
-[TOC]
+\[TOC]
 
 ***
 
@@ -223,16 +223,16 @@ graph TB
 
 #### Master 节点网络端口
 
-| 源地址           | 目标端口  | 协议  | 用途                    |
-| ------------- | ----- | --- | --------------------- |
+| 源地址                               | 目标端口  | 协议  | 用途                    |
+| --------------------------------- | ----- | --- | --------------------- |
 | 客户端/执行机 → apiserver.cluster.local | 6443  | TCP | Kubernetes API Server |
-| Master 节点间    | 2380  | TCP | etcd peer 通信          |
-| Master 节点间    | 2379  | TCP | etcd client 通信        |
-| 所有节点          | 10250 | TCP | Kubelet API           |
-| Worker 节点     | 10259 | TCP | Scheduler 健康          |
-| Worker 节点     | 10257 | TCP | Controller Manager 健康 |
-| 监控节点          | 9100  | TCP | Node Exporter（可选）     |
-| 监控节点          | 10249 | TCP | kube-proxy 健康检查       |
+| Master 节点间                        | 2380  | TCP | etcd peer 通信          |
+| Master 节点间                        | 2379  | TCP | etcd client 通信        |
+| 所有节点                              | 10250 | TCP | Kubelet API           |
+| Worker 节点                         | 10259 | TCP | Scheduler 健康          |
+| Worker 节点                         | 10257 | TCP | Controller Manager 健康 |
+| 监控节点                              | 9100  | TCP | Node Exporter（可选）     |
+| 监控节点                              | 10249 | TCP | kube-proxy 健康检查       |
 
 #### Worker 节点网络端口
 
@@ -245,8 +245,8 @@ graph TB
 
 #### 控制平面入口网络端口
 
-| 源地址        | 目标端口 | 协议  | 用途                     |
-| ---------- | ---- | --- | ---------------------- |
+| 源地址        | 目标端口 | 协议  | 用途                                         |
+| ---------- | ---- | --- | ------------------------------------------ |
 | 用户/客户端/执行机 | 6443 | TCP | Kubernetes API 访问（apiserver.cluster.local） |
 
 #### 存储节点网络端口（以 Ceph 为例）
@@ -599,12 +599,6 @@ rotateCertificates: true
 serializeImagePulls: false
 ```
 
-EOF
-
-````
-
-
-
 #### 4.4.2 初始化集群
 
 在 **Master-01** 节点执行：
@@ -655,44 +649,78 @@ sealos apply -f Clusterfile
 #   --masters 192.168.33.100,192.168.33.101,192.168.33.102 \
 #   --nodes   192.168.33.103,192.168.33.104,192.168.33.105 \
 #   --passwd  'YourStrongPassword'
-````
+```
 
 #### 4.4.3 验证集群状态
 
 ```bash
 # ── 所有系统通用 ──────────────────────────
-# 配置 kubectl
-mkdir -p ~/.kube
-cp /etc/kubernetes/admin.conf ~/.kube/config
-chmod 600 ~/.kube/config
 
 # 验证节点状态
-kubectl get nodes -o wide
-
-# 预期输出（所有节点应为 Ready 状态）：
-# NAME                STATUS   ROLES           AGE   VERSION
-# sealos-master-01    Ready    control-plane   10m   v1.29.0
-# sealos-master-02    Ready    control-plane   9m    v1.29.0
-# sealos-master-03    Ready    control-plane   8m    v1.29.0
-# sealos-worker-01    Ready    <none>          7m    v1.29.0
-# sealos-worker-02    Ready    <none>          7m    v1.29.0
-# sealos-worker-03    Ready    <none>          7m    v1.29.0
+]# kubectl get nodes -o wide
+NAME        STATUS   ROLES           AGE    VERSION   INTERNAL-IP      EXTERNAL-IP   OS-IMAGE                      KERNEL-VERSION                 CONTAINER-RUNTIME
+k8s-node1   Ready    control-plane   116m   v1.28.0   192.168.33.100   <none>        Rocky Linux 9.3 (Blue Onyx)   5.14.0-362.13.1.el9_3.x86_64   containerd://1.7.29
+k8s-node2   Ready    control-plane   115m   v1.28.0   192.168.33.101   <none>        Rocky Linux 9.3 (Blue Onyx)   5.14.0-362.13.1.el9_3.x86_64   containerd://1.7.29
+k8s-node3   Ready    control-plane   114m   v1.28.0   192.168.33.102   <none>        Rocky Linux 9.3 (Blue Onyx)   5.14.0-362.13.1.el9_3.x86_64   containerd://1.7.29
+k8s-node4   Ready    <none>          114m   v1.28.0   192.168.33.103   <none>        Rocky Linux 9.3 (Blue Onyx)   5.14.0-362.13.1.el9_3.x86_64   containerd://1.7.29
+k8s-node5   Ready    <none>          114m   v1.28.0   192.168.33.104   <none>        Rocky Linux 9.3 (Blue Onyx)   5.14.0-362.13.1.el9_3.x86_64   containerd://1.7.29
 
 # 验证 Pod 状态
-kubectl get pods -A
+]# kubectl get pods -A
+NAMESPACE          NAME                                       READY   STATUS    RESTARTS       AGE
+calico-apiserver   calico-apiserver-777fc549b8-mc6sc          1/1     Running   0              112m
+calico-apiserver   calico-apiserver-777fc549b8-vfcj6          1/1     Running   0              112m
+calico-system      calico-kube-controllers-5b795dd467-z8cbn   1/1     Running   0              113m
+calico-system      calico-node-8wpsj                          1/1     Running   0              113m
+calico-system      calico-node-8z9ll                          1/1     Running   0              113m
+calico-system      calico-node-g4lq6                          1/1     Running   0              113m
+calico-system      calico-node-l85vs                          1/1     Running   0              113m
+calico-system      calico-node-lxbd8                          1/1     Running   0              113m
+calico-system      calico-typha-54fcbcd5c9-56jx7              1/1     Running   0              113m
+calico-system      calico-typha-54fcbcd5c9-fdrtj              1/1     Running   0              113m
+calico-system      calico-typha-54fcbcd5c9-jqg6m              1/1     Running   0              113m
+calico-system      csi-node-driver-5wjt9                      2/2     Running   0              113m
+calico-system      csi-node-driver-v5kgd                      2/2     Running   0              113m
+calico-system      csi-node-driver-w82j7                      2/2     Running   0              113m
+calico-system      csi-node-driver-xszmg                      2/2     Running   0              113m
+calico-system      csi-node-driver-zg8z2                      2/2     Running   0              113m
+kube-system        coredns-6554b8b87f-llzxr                   1/1     Running   0              116m
+kube-system        coredns-6554b8b87f-qqxx9                   1/1     Running   0              116m
+kube-system        etcd-k8s-node1                             1/1     Running   0              116m
+kube-system        etcd-k8s-node2                             1/1     Running   0              116m
+kube-system        etcd-k8s-node3                             1/1     Running   0              114m
+kube-system        kube-apiserver-k8s-node1                   1/1     Running   0              116m
+kube-system        kube-apiserver-k8s-node2                   1/1     Running   1 (115m ago)   115m
+kube-system        kube-apiserver-k8s-node3                   1/1     Running   0              114m
+kube-system        kube-controller-manager-k8s-node1          1/1     Running   2 (112m ago)   116m
+kube-system        kube-controller-manager-k8s-node2          1/1     Running   1 (113m ago)   114m
+kube-system        kube-controller-manager-k8s-node3          1/1     Running   0              114m
+kube-system        kube-proxy-79mzp                           1/1     Running   0              116m
+kube-system        kube-proxy-8bqr7                           1/1     Running   0              114m
+kube-system        kube-proxy-8p5b6                           1/1     Running   0              114m
+kube-system        kube-proxy-jh95s                           1/1     Running   0              114m
+kube-system        kube-proxy-zc66n                           1/1     Running   0              116m
+kube-system        kube-scheduler-k8s-node1                   1/1     Running   2 (112m ago)   116m
+kube-system        kube-scheduler-k8s-node2                   1/1     Running   1 (113m ago)   114m
+kube-system        kube-scheduler-k8s-node3                   1/1     Running   0              114m
+kube-system        kube-sealos-lvscare-k8s-node4              1/1     Running   0              114m
+kube-system        kube-sealos-lvscare-k8s-node5              1/1     Running   0              114m
+tigera-operator    tigera-operator-94d7f7696-ph996            1/1     Running   4 (111m ago)   114m
 
-# 预期输出（所有 Pod 应为 Running 状态）：
-# NAMESPACE     NAME                                       READY   STATUS    RESTARTS   AGE
-# kube-system   calico-kube-controllers-xxx               1/1     Running   0          10m
-# kube-system   calico-node-xxx                           1/1     Running   0          10m
-# kube-system   coredns-xxx                               1/1     Running   0          10m
-# kube-system   etcd-sealos-master-01                     1/1     Running   0          10m
 
 # 验证集群组件健康
-kubectl get cs
+]# kubectl get cs
+Warning: v1 ComponentStatus is deprecated in v1.19+
+NAME                 STATUS    MESSAGE   ERROR
+scheduler            Healthy   ok        
+controller-manager   Healthy   ok        
+etcd-0               Healthy   ok
 
 # 验证网络连通性
-kubectl get svc
+]# kubectl get svc
+NAME         TYPE        CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+kubernetes   ClusterIP   10.96.0.1    <none>        443/TCP   117m
+
 ```
 
 #### 4.4.4 部署 Sealos Dashboard
@@ -1663,3 +1691,4 @@ firewall-cmd --reload
 - [kubeadm 配置规范](https://kubernetes.io/docs/reference/config-api/kubeadm-config.v1beta3/)
 - [Containerd Registry 配置](https://github.com/containerd/containerd/blob/main/docs/hosts.md)
 - [Calico 官方文档](https://docs.tigera.io/calico/latest/)
+
