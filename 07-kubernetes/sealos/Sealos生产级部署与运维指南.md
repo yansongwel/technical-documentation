@@ -495,8 +495,8 @@ sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.to
 # ── 优化配置（可选） ────────────────────────
 # 1. 修改数据目录（建议挂载到大容量磁盘，例如 /data/containerd）
 #    默认为 /var/lib/containerd，若 /var 分区较小容易占满
-# mkdir -p /data/containerd
-# sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
+mkdir -p /data/containerd
+sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
 
 # 2. 修改 sandbox 镜像（国内环境推荐使用阿里云镜像）
 #    默认配置中 sandbox 位于 [plugins."io.containerd.cri.v1.images".pinned_images]
@@ -562,10 +562,11 @@ ctr version
 # ── Rocky Linux 9 ──────────────────────────
 # 下载 Sealos 二进制文件
 SEALOS_VERSION="5.1.1"  # ← 根据需要修改版本
-curl -sfL https://raw.githubusercontent.com/labring/sealos/main/scripts/install.sh \
-  | sh -s v${SEALOS_VERSION} labring/sealos:${SEALOS_VERSION}
+# 注意：install.sh 脚本在拼接 URL 时可能存在问题（如多余的 repo 名称），建议直接下载二进制文件
+# curl -sfL https://raw.githubusercontent.com/labring/sealos/main/scripts/install.sh \
+#   | sh -s v${SEALOS_VERSION} labring/sealos:${SEALOS_VERSION}
 
-# 或直接下载二进制
+# 推荐：直接下载二进制文件（更稳定）
 wget https://github.com/labring/sealos/releases/download/v${SEALOS_VERSION}/sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
 tar -zxvf sealos_${SEALOS_VERSION}_linux_amd64.tar.gz
 mv sealos /usr/local/bin/
@@ -574,6 +575,14 @@ chmod +x /usr/local/bin/sealos
 # 验证安装
 sealos version
 ```
+
+解压包内文件说明：
+
+- `sealos`：Sealos 主命令，负责集群创建/扩容/升级/应用交付等核心能力（实际运行时主要用它）
+- `sealctl`：Sealos 辅助管理工具，常用于集群运维/诊断类的配套命令（按需使用）
+- `lvscare`：Sealos 组件之一，用于在集群中提供/维护 LVS 相关能力（通常作为组件随集群使用，不必单独手工执行）
+- `image-cri-shim`：镜像相关的 CRI 适配组件，用于与容器运行时/CRI 交互的场景（通常随 Sealos 流程或组件使用）
+- `README.md`：当前版本的发行包说明、用法提示与变更信息
 
 ### 4.3 Ubuntu 22.04 部署步骤
 
@@ -603,6 +612,36 @@ containerd config default > /etc/containerd/config.toml
 
 # 修改配置使用 systemd cgroup driver
 sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+# ── 优化配置（可选） ────────────────────────
+# 1. 修改数据目录（建议挂载到大容量磁盘，例如 /data/containerd）
+#    默认为 /var/lib/containerd，若 /var 分区较小容易占满
+mkdir -p /data/containerd
+sed -i 's|^root = .*|root = "/data/containerd"|' /etc/containerd/config.toml
+
+# 2. 修改 sandbox 镜像（国内环境推荐使用阿里云镜像）
+#    默认配置中 sandbox 常见为 sandbox = 'registry.k8s.io/pause:3.10.1'
+# sed -i 's|sandbox = .*|sandbox = "registry.aliyuncs.com/google_containers/pause:3.10.1"|' /etc/containerd/config.toml
+
+# 3. 配置国内镜像加速（解决 Docker Hub 拉取限速问题）
+#    默认配置通常开启了 config_path，推荐使用 hosts.toml 方式配置镜像，无需修改 config.toml
+mkdir -p /etc/containerd/certs.d/docker.io
+cat > /etc/containerd/certs.d/docker.io/hosts.toml << EOF
+server = "https://registry-1.docker.io"
+
+[host."https://docker.1ms.run"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://dockerproxy.net"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://proxy.vvvv.ee"]
+  capabilities = ["pull", "resolve"]
+
+[host."https://dockerproxy.link"]
+  capabilities = ["pull", "resolve"]
+EOF
+# ──────────────────────────────────────────
 
 # 启动并启用 containerd
 systemctl enable --now containerd
@@ -788,8 +827,8 @@ ssh-copy-id root@192.168.1.30
 ssh-copy-id root@192.168.1.31
 ssh-copy-id root@192.168.1.32
 
-# 使用 Sealos 初始化集群
-sealos init -f ClusterConfig
+# 使用 Sealos 初始化集群（Sealos v5 使用 apply/run，不再支持 init）
+sealos apply -f Clusterfile
 
 # 集群初始化时间约 5-10 分钟，请耐心等待
 ```
