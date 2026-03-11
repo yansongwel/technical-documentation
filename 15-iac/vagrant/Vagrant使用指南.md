@@ -81,7 +81,23 @@ vagrant plugin list
     └── Vagrantfile_Ubuntu24    # Ubuntu 24.04 集群配置
 ```
 
-> ⚠️ **重要**：每个项目需在独立目录中放置一个名为 `Vagrantfile`（无扩展名）的文件才能正常使用 `vagrant up`。建议复制示例文件重命名为 `Vagrantfile` 后使用。
+**如何使用自定义文件名启动（无需重命名为 Vagrantfile）**
+
+Vagrant 默认在当前目录寻找名为 `Vagrantfile`（无扩展名）的文件。如果文件名不同，可通过 `VAGRANT_VAGRANTFILE` 环境变量指定：
+
+```powershell
+# 方式一：在当前会话中设置临时环境变量（推荐）
+$env:VAGRANT_VAGRANTFILE = "Vagrantfile_Rocky9"
+vagrant up
+
+# 方式二：内联单条命令执行（不污染后续会话）
+$env:VAGRANT_VAGRANTFILE="Vagrantfile_Rocky9"; vagrant up
+
+# 清除临时环境变量
+$env:VAGRANT_VAGRANTFILE = $null
+```
+
+> 💡 **推荐工作方式**：为每种当前使用的场景建一个小目录，将示例文件复制到小目录并命名为 `Vagrantfile`，囧就其次用环境变量指定。
 
 ### 2.5 控制存储位置（防止占用 C 盘）⭐
 
@@ -205,6 +221,29 @@ vagrant box prune
 ## 5. 常用命令速查
 
 ### 5.1 虚拟机生命周期
+
+**▶ 指定自定义文件名（文件名不是 Vagrantfile 时）**
+
+```powershell
+# 通过 VAGRANT_VAGRANTFILE 环境变量指定文件名
+# ─── 方式一：先设置变量，后续所有 vagrant 命令都生效（当前 PowerShell 会话有效）
+$env:VAGRANT_VAGRANTFILE = "Vagrantfile_Rocky9"
+vagrant up
+
+# ─── 方式二：单条命令内联（只影响这一条命令）
+$env:VAGRANT_VAGRANTFILE="Vagrantfile_Rocky9"; vagrant up
+$env:VAGRANT_VAGRANTFILE="Vagrantfile_Rocky9"; vagrant halt
+$env:VAGRANT_VAGRANTFILE="Vagrantfile_Rocky9"; vagrant ssh k8s-node1
+
+# ─── 清除变量（恢复默认查找 Vagrantfile）
+$env:VAGRANT_VAGRANTFILE = $null
+```
+
+> ⚠️ `VAGRANT_VAGRANTFILE` 指定的是**文件名**（不含路径），Vagrant 仍然在当前目录下查找该文件。使用时需先 `cd` 到文件所在目录。
+
+---
+
+**▶ 常规生命周期命令**
 
 ```powershell
 # ─── 在 Vagrantfile 所在目录执行以下命令 ───────────────────
