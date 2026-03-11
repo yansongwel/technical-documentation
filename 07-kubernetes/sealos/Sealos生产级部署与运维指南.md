@@ -754,7 +754,7 @@ localAPIEndpoint:
 nodeRegistration:
   kubeletExtraArgs:
     node-ip: 192.168.33.100          # ★ 与 advertiseAddress 保持一致
-  taints: null                        # 去掉 master 节点的 NoSchedule 污点（单机或测试时有用）
+  taints: null                        # 不指定自定义 taint；默认仍会给控制平面节点打 NoSchedule 污点。若需允许在 Master 调度可改为 taints: []
 
 ---
 # ═══════════════════════════════════════════════════════════
@@ -929,6 +929,13 @@ ssh root@192.168.33.103 "hostname"
 # ── 步骤二：执行集群初始化 ──────────────────
 # Sealos v5 使用 apply 命令，不再支持旧版的 init
 sealos apply -f Clusterfile
+
+# 常见报错：hostname cannot be repeated
+# - 原因 1：多台机器的 /etc/hostname 相同（例如都叫 localhost.localdomain）
+# - 原因 2：Clusterfile 中 masters/nodes 列表写成了同一批 IP，导致同一台机器被重复加入（日志里会看到 worker 和 master IP 一样）
+# 处理方式：
+# - 确认每台机器 hostname 唯一：ssh root@<ip> "hostname"；必要时 hostnamectl set-hostname <unique-name>
+# - 纠正 Clusterfile：三节点一套同时跑控制面与业务时，推荐 roles 直接写 [master, node, amd64]，不要把同一批 IP 同时写进 masters 和 nodes
 
 # 集群初始化时间约 5-10 分钟，请耐心等待
 # 出现 "succeeded" 或 kubectl get nodes 全部 Ready 即为成功
