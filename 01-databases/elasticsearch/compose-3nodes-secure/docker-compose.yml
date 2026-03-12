@@ -1,4 +1,4 @@
-name: es-secure-3node
+name: es-3node
 
 services:
   setup:
@@ -8,30 +8,43 @@ services:
     working_dir: /usr/share/elasticsearch
     command: >
       bash -c '
+        mkdir -p config/certs;
+        cp /tmp/instances.yml config/certs/instances.yml;
         if [ ! -f config/certs/ca/ca.crt ]; then
-          mkdir -p config/certs;
-          cp /tmp/instances.yml config/certs/instances.yml;
           bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
           unzip -q config/certs/ca.zip -d config/certs;
-          bin/elasticsearch-certutil cert --silent --pem
-            --in config/certs/instances.yml
-            --ca-cert config/certs/ca/ca.crt
-            --ca-key config/certs/ca/ca.key
-            -out config/certs/certs.zip;
+        fi;
+        if [ ! -f config/certs/es01/es01.crt ]; then
+          bin/elasticsearch-certutil cert --silent --pem --in config/certs/instances.yml --ca-cert config/certs/ca/ca.crt --ca-key config/certs/ca/ca.key -out config/certs/certs.zip;
           unzip -q config/certs/certs.zip -d config/certs;
         fi;
         chown -R root:root config/certs;
         find config/certs -type d -exec chmod 750 {} \;;
         find config/certs -type f -exec chmod 640 {} \;;
+        sleep infinity;
       '
     volumes:
-      - certs:/usr/share/elasticsearch/config/certs
+      - ./certs:/usr/share/elasticsearch/config/certs
       - ./setup/instances.yml:/tmp/instances.yml:ro
     healthcheck:
-      test: ["CMD-SHELL", "test -f config/certs/es01/es01.crt"]
+      test: ["CMD-SHELL", "test -f /usr/share/elasticsearch/config/certs/es01/es01.crt"]
       interval: 2s
       timeout: 10s
       retries: 120
+
+  init-perms:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: es-init-perms
+    user: "0"
+    command: >
+      bash -c '
+        mkdir -p /mnt/esdata01 /mnt/esdata02 /mnt/esdata03;
+        chown -R 1000:0 /mnt/esdata01 /mnt/esdata02 /mnt/esdata03;
+      '
+    volumes:
+      - ./data/es01:/mnt/esdata01
+      - ./data/es02:/mnt/esdata02
+      - ./data/es03:/mnt/esdata03
 
   es01:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
@@ -39,6 +52,8 @@ services:
     depends_on:
       setup:
         condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
     environment:
       - cluster.name=${CLUSTER_NAME}
       - bootstrap.memory_lock=true
@@ -52,13 +67,13 @@ services:
         soft: 65535
         hard: 65535
     volumes:
-      - certs:/usr/share/elasticsearch/config/certs
-      - esdata01:/usr/share/elasticsearch/data
+      - ./certs:/usr/share/elasticsearch/config/certs
+      - ./data/es01:/usr/share/elasticsearch/data
       - ./config/es01.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
     ports:
       - "${ES_HTTP_PORT}:9200"
     healthcheck:
-      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q \"missing authentication credentials\""]
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 | grep -q \"missing authentication credentials\""]
       interval: 10s
       timeout: 10s
       retries: 120
@@ -82,8 +97,8 @@ services:
         soft: 65535
         hard: 65535
     volumes:
-      - certs:/usr/share/elasticsearch/config/certs
-      - esdata02:/usr/share/elasticsearch/data
+      - ./certs:/usr/share/elasticsearch/config/certs
+      - ./data/es02:/usr/share/elasticsearch/data
       - ./config/es02.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
 
   es03:
@@ -105,16 +120,6 @@ services:
         soft: 65535
         hard: 65535
     volumes:
-      - certs:/usr/share/elasticsearch/config/certs
-      - esdata03:/usr/share/elasticsearch/data
+      - ./certs:/usr/share/elasticsearch/config/certs
+      - ./data/es03:/usr/share/elasticsearch/data
       - ./config/es03.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
-
-volumes:
-  certs:
-    driver: local
-  esdata01:
-    driver: local
-  esdata02:
-    driver: local
-  esdata03:
-    driver: local

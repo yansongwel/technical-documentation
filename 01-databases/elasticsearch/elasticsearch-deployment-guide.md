@@ -1,657 +1,402 @@
-# Elasticsearch 生产级部署与运维指南
+---
+title: Elasticsearch Docker Compose 三节点部署与运维指南（HTTP + 账号密码）
+author: devinyan
+updated: 2026-03-12
+version: 1.0
+---
 
-本文档提供 Elasticsearch 在生产环境下的高可用部署、配置调优及日常运维操作指南，适用于 Rocky Linux 9 和 Ubuntu 22.04 系统。
+[TOC]
+
+本文档按仓库内 `compose-3nodes-secure/` 目录的三节点 Compose 实践流程编写，默认以单台宿主机运行 3 个 Elasticsearch 容器为目标。
+
+> ⚠️ 本文档模式为 HTTP 明文（不启用 HTTPS），但启用账号密码认证。账号密码会以明文方式在网络中传输，仅用于开发/测试或完全可信内网环境。
 
 ## 1. 简介
 
 ### 1.1 服务介绍与核心特性
-Elasticsearch 是一个基于 Lucene 构建的开源、分布式、RESTful 搜索和分析引擎。
-- **分布式架构**：天生支持集群扩展，自动分片与副本管理。
-- **近实时搜索**：数据写入后 1秒内即可被搜索。
-- **多租户支持**：通过索引隔离不同业务数据。
-- **RESTful API**：使用 JSON over HTTP 进行交互，易于集成。
+
+Elasticsearch 是一个基于 Lucene 构建的分布式搜索与分析引擎，核心特性：
+- **分布式扩展**：分片与副本自动管理，支持水平扩容
+- **近实时检索**：写入后可快速被检索
+- **REST API**：HTTP/JSON 交互，便于集成
+- **安全能力可选**：可启用 TLS、账号认证、RBAC、审计等（生产建议开启）
 
 ### 1.2 适用场景
-- **日志分析**：ELK (Elasticsearch, Logstash, Kibana) 栈的核心组件。
-- **全文检索**：电商商品搜索、站内搜索。
-- **安全分析**：SIEM (Security Information and Event Management)。
-- **指标监控**：应用性能监控 (APM) 数据存储。
 
-### 1.3 架构原理图
+- **日志分析**：ELK/EFK 栈核心存储
+- **全文检索**：站内搜索、电商搜索
+- **安全分析**：SIEM、审计检索
+- **指标与追踪**：APM/Trace 指标查询与聚合
 
-```ascii
-+---------------------------------------------------------+
-|                      Elasticsearch Cluster              |
-|                                                         |
-|  +-------------+      +-------------+      +-------------+  |
-|  |   Node-1    |      |   Node-2    |      |   Node-3    |  |
-|  | (Master/Data)|<---->| (Master/Data)|<---->| (Master/Data)|  |
-|  |             |      |             |      |             |  |
-|  |  [Shard P1] |      |  [Shard R1] |      |  [Shard R2] |  |
-|  |  [Shard R2] |      |  [Shard P2] |      |  [Shard P3] |  |
-|  +------+------+      +------+------+      +------+------+  |
-|         ^                    ^                    ^         |
-+---------|--------------------|--------------------|---------+
-          |                    |                    |
-      +---+--------------------+--------------------+---+
-      |                  Load Balancer                  |
-      +------------------------+------------------------+
-                               |
-                        Client Application
+### 1.3 架构原理图（单机三节点容器）
+
+```mermaid
+flowchart LR
+  subgraph HOST[宿主机]
+    subgraph NET[Docker Network]
+      ES01[(es01\nmaster/data/ingest)]
+      ES02[(es02\nmaster/data/ingest)]
+      ES03[(es03\nmaster/data/ingest)]
+      ES01 <-- Transport 9300/TLS --> ES02
+      ES02 <-- Transport 9300/TLS --> ES03
+      ES01 <-- Transport 9300/TLS --> ES03
+    end
+  end
+
+  Client[Client/curl] -->|HTTP 9200 + Basic Auth| ES01
 ```
+
+### 1.4 版本说明（推荐版本）
+
+- Elasticsearch：`9.3.1`（本仓库 Compose 默认值，见 `compose-3nodes-secure/.env`）
+- Docker Engine：`24+`（建议使用新版本，便于获得最新的 cgroup/网络修复）
+- Docker Compose：`docker compose`（插件形式，v2+，本文档不使用 `docker-compose`）
 
 ## 2. 版本选择指南
 
 ### 2.1 版本对应关系表
 
-| 版本系列 | 当前状态 | JDK 要求 | 特性说明 |
+| 版本系列 | 当前状态 | JDK 要求 | 说明 |
 | :--- | :--- | :--- | :--- |
-| **8.x (推荐)** | Current | 内置 JDK 17+ | 默认开启安全特性(TLS/Auth)，性能大幅提升，移除 Mapping Type |
-| **7.x** | Maintenance | JDK 11+ | 广泛使用，生态成熟，逐步废弃 Type |
-| **6.x** | EOL | JDK 8 | 已停止维护，不建议新项目使用 |
+| **9.x** | Current | 内置 JDK | 新功能更活跃，默认安全开启 |
+| **8.x** | Widely used | 内置 JDK | 生态成熟，默认安全开启 |
+| **7.x** | Maintenance | 需要 JDK 11+ | 安全默认行为不同，迁移成本更高 |
 
 ### 2.2 版本决策建议
-- **新项目**：强烈建议选择 **8.x** 最新稳定版（如 8.11+）。8.x 默认安全性更高，且在存储效率和查询性能上有显著优化。
-- **旧项目迁移**：如果现有应用深度依赖 7.x 特性（如 Transport Client），需评估迁移成本。建议先升级至 7.17，再滚动升级至 8.x。
-- **JDK 兼容性**：8.x 版本通常内置了适配的 OpenJDK，无需单独安装 JDK，简化了部署。
 
-## 3. 生产环境规划（高可用架构）
+- 新部署优先选择 9.x/8.x：默认安全能力更完整，运维成本更低
+- 对兼容性要求高的存量系统：建议先评估客户端 SDK 与索引模板兼容性，再升级
 
-### 3.1 集群架构图
+## 3. 目录规划（宿主机持久化）
 
-建议生产环境至少部署 3 个节点，均配置为 Master-eligible 和 Data 角色，以防脑裂（Split-brain）并保证数据高可用。
+### 3.1 目录结构（本仓库规划）
 
-```ascii
-      +---------------------+       +---------------------+       +---------------------+
-      |       Node-01       |       |       Node-02       |       |       Node-03       |
-      | IP: 192.168.1.101   |       | IP: 192.168.1.102   |       | IP: 192.168.1.103   |
-      | Role: Master, Data  |       | Role: Master, Data  |       | Role: Master, Data  |
-      +----------+----------+       +----------+----------+       +----------+----------+
-                 |                             |                             |
-                 +--------------+--------------+--------------+--------------+
-                                | Internal Transport (9300)   |
-                                +-----------------------------+
+部署目录：`01-databases/elasticsearch/compose-3nodes-secure/`
+
+```text
+compose-3nodes-secure/
+├── .env
+├── docker-compose.yml
+├── config/
+│   ├── es01.yml
+│   ├── es02.yml
+│   └── es03.yml
+├── setup/
+│   └── instances.yml
+├── certs/                      # 自动生成：Transport TLS 证书（客户端不使用）
+│   ├── ca/
+│   ├── es01/
+│   ├── es02/
+│   └── es03/
+└── data/                       # 自动生成：三节点数据目录
+    ├── es01/
+    ├── es02/
+    └── es03/
 ```
 
-### 3.2 节点角色与配置要求
+### 3.2 持久化策略说明
 
-| 规格类型 | CPU | 内存 | 磁盘 | 适用场景 |
-| :--- | :--- | :--- | :--- | :--- |
-| **最低配置** | 2 Core | 4 GB | 50 GB (SSD) | 开发/测试，小规模日志 |
-| **推荐配置** | 4-8 Core | 16-32 GB | 500 GB+ (NVMe SSD) | 生产环境，高并发读写 |
-| **高性能配置**| 16 Core+ | 64 GB | 1 TB+ (RAID 0/10) | 大规模日志分析，复杂聚合 |
-
-> **注意**：Elasticsearch 堆内存（Heap Size）建议设置为物理内存的 50%，且最大不超过 31GB（以利用 Compressed Oops 技术）。
+- `data/`：三节点数据分别落盘到宿主机目录，便于空间规划与排错
+- `certs/`：为节点间 9300 通信生成的 Transport TLS 证书（客户端访问 9200 不需要证书）
+- 删除容器不会清理数据：需要手动删除 `data/`（以及按需删除 `certs/`）才会完全重置环境
 
 ### 3.3 网络与端口规划
 
-| 端口号 | 协议 | 说明 | 访问限制 |
-| :--- | :--- | :--- | :--- |
-| **9200** | TCP/HTTP | REST API 接口，客户端交互 | 仅对内网应用或 Load Balancer 开放 |
-| **9300** | TCP | 集群节点间通信 (Transport) | 仅对集群内部节点开放 |
+| 源地址 | 目标地址 | 目标端口 | 协议 | 用途 | 访问限制 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| Client/本机 | 宿主机 `localhost` | `ES_HTTP_PORT`（默认 9200） | HTTP | REST API（Basic Auth） | 仅限测试网/内网，避免公网暴露 |
+| es01/es02/es03 | Docker 网络内互联 | 9300 | TLS over TCP | 节点间 Transport 通信 | 仅容器网络内可达（不对宿主机映射） |
 
-## 4. 生产环境部署
+## 4. Docker Compose 三节点部署（HTTP）
 
-### 4.1 前置准备（所有节点）
+### 4.1 前置准备（宿主机）
 
-**1. 配置主机名解析**
-确保所有节点 `/etc/hosts` 包含集群所有 IP：
-```bash
-cat >> /etc/hosts << 'EOF'
-192.168.1.101 node-01
-192.168.1.102 node-02
-192.168.1.103 node-03
-EOF
-```
+> 🖥️ **执行节点：宿主机**
 
-**2. 禁用 Swap (必须)**
-Elasticsearch 严重依赖内存，Swap 会导致性能急剧下降。
-```bash
-swapoff -a
-sed -i '/swap/s/^/#/' /etc/fstab
-```
+#### 4.1.1 内核参数（必须）
 
-**3. 调整系统内核参数**
-增加虚拟内存区域映射数量和文件描述符限制。
+Elasticsearch 启动会执行 bootstrap checks，`vm.max_map_count` 不满足会直接退出（exit code 78）。
 
 ```bash
-cat >> /etc/sysctl.conf << 'EOF'
-vm.max_map_count=262144
-EOF
+sysctl vm.max_map_count
 
-sysctl -p
-```
-
-**4. 调整资源限制**
-```bash
-cat >> /etc/security/limits.conf << 'EOF'
-elasticsearch soft memlock unlimited
-elasticsearch hard memlock unlimited
-elasticsearch soft nofile 65535
-elasticsearch hard nofile 65535
-EOF
-```
-
-### 4.2 部署步骤
-
-#### ── Rocky Linux 9 ──────────────────────────
-```bash
-# 导入 GPG Key
-rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
-
-# 添加 Yum 源
-cat > /etc/yum.repos.d/elasticsearch.repo << 'EOF'
-[elasticsearch]
-name=Elasticsearch repository for 8.x packages
-baseurl=https://artifacts.elastic.co/packages/8.x/yum
-gpgcheck=1
-gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
-enabled=1
-autorefresh=1
-type=rpm-md
-EOF
-
-# 安装
-dnf install -y elasticsearch
-```
-
-#### ── Ubuntu 22.04 ───────────────────────────
-```bash
-# 安装依赖
-apt-get update && apt-get install -y apt-transport-https gnupg
-
-# 导入 GPG Key
-wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
-
-# 添加 APT 源
-echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" | tee /etc/apt/sources.list.d/elastic-8.x.list
-
-# 安装
-apt-get update && apt-get install -y elasticsearch
-```
-
-### 4.4 集群初始化与配置
-
-以下配置以 `node-01` 为例，其他节点需修改 `node.name` 和 `network.host`。
-
-**编辑配置文件：**
-```bash
-# 备份默认配置
-cp /etc/elasticsearch/elasticsearch.yml /etc/elasticsearch/elasticsearch.yml.bak
-
-# 写入生产配置 (Node-01 示例)
-cat > /etc/elasticsearch/elasticsearch.yml << 'EOF'
-# ======================== Cluster =========================
-cluster.name: my-es-cluster               # ★ 集群名称，所有节点必须一致
-node.name: node-01                        # ★ 节点名称，每个节点唯一
-
-# ======================== Network =========================
-network.host: 192.168.1.101               # ★ 本机 IP，绑定监听地址
-http.port: 9200
-transport.port: 9300
-
-# ======================== Discovery =======================
-# ★ 集群初始主节点列表（仅在集群首次启动时需要，之后可注释）
-cluster.initial_master_nodes: ["node-01", "node-02", "node-03"]
-
-# ★ 种子主机列表，用于节点发现
-discovery.seed_hosts: ["192.168.1.101", "192.168.1.102", "192.168.1.103"]
-
-# ======================== Paths ===========================
-path.data: /var/lib/elasticsearch         # ⚠️ 数据存储路径，建议挂载独立大磁盘
-path.logs: /var/log/elasticsearch
-
-# ======================== Memory ==========================
-bootstrap.memory_lock: true               # ★ 锁定内存，防止 Swap
-
-# ======================== Security (8.x Default) ==========
-xpack.security.enabled: false             # ⚠️ 生产环境建议开启 (true)，此处为简化演示设为 false
-xpack.security.enrollment.enabled: false
-
-xpack.security.http.ssl:
-  enabled: false
-xpack.security.transport.ssl:
-  enabled: false
-EOF
-```
-
-> **⚠️ 安全说明**：ES 8.x 默认开启 Security (TLS/Auth)。若开启，首次启动会生成 `elastic` 用户密码和 Enrollment Token。为简化集群搭建流程，上述配置暂时关闭了 Security。生产环境**强烈建议**开启 Security 并配置 TLS 证书。
-
-**JVM 堆内存配置：**
-```bash
-cat >> /etc/elasticsearch/jvm.options.d/heap.options << 'EOF'
--Xms4g  # ★ 根据实际物理内存调整，建议为物理内存 50%
--Xmx4g
-EOF
-```
-
-**启动服务：**
-```bash
-# Reload systemd
-systemctl daemon-reload
-systemctl enable elasticsearch
-systemctl start elasticsearch
-```
-
-### 4.5 安装验证
-
-在任意节点执行：
-```bash
-curl -X GET "http://localhost:9200/_cat/nodes?v"
-```
-
-**预期输出：**
-```text
-ip            heap.percent ram.percent cpu load_1m load_5m load_15m node.role   master name
-192.168.1.101           15          45   5    0.10    0.05     0.01 cdfhilmrstw *      node-01
-192.168.1.102           12          40   3    0.08    0.04     0.01 cdfhilmrstw -      node-02
-192.168.1.103           14          42   4    0.09    0.06     0.01 cdfhilmrstw -      node-03
-```
-可以看到 3 个节点均已加入集群，且有一个 Master (`*`)。
-
-## 5. 关键参数配置说明
-
-### 5.1 核心配置文件详解
-
-文件路径：`/etc/elasticsearch/elasticsearch.yml`
-
-| 参数名 | 默认值 | 说明 | 生产建议 |
-| :--- | :--- | :--- | :--- |
-| `cluster.name` | elasticsearch | 集群标识 | **必须修改**，防止误加入其他集群 |
-| `node.name` | (hostname) | 节点标识 | **必须修改**，保持易读性 |
-| `path.data` | /var/lib/... | 数据目录 | 建议挂载高性能 SSD 盘 |
-| `bootstrap.memory_lock` | false | 内存锁定 | **设置为 true**，配合 `limit.conf` |
-| `network.host` | localhost | 绑定 IP | 设置为服务器内网 IP |
-| `discovery.seed_hosts` | - | 发现列表 | 填写所有 Master 候选节点 IP |
-| `cluster.initial_master_nodes` | - | 初始主节点 | 仅首次启动需配置，填写节点名 |
-
-### 5.2 生产环境推荐调优参数
-
-**1. 索引刷新间隔 (Refresh Interval)**
-默认 1s。如果是海量数据写入场景，建议调大以减少 I/O 压力。
-```json
-PUT /_cluster/settings
-{
-  "persistent": {
-    "indices.recovery.max_bytes_per_sec": "100mb"
-  }
-}
-```
-
-**2. 字段数据缓存 (Fielddata Cache)**
-限制 Fielddata 内存使用，防止 OOM。
-```yaml
-indices.fielddata.cache.size: 20%
-```
-
-## 6. 开发/测试环境快速部署（Docker Compose）
-
-**⚠️ 注意：此方案仅适用于开发或测试环境，生产环境请使用物理机或虚拟机集群部署。**
-
-### 6.1 Docker Compose 部署（单机）
-
-创建 `docker-compose.yml`：
-
-```bash
-cat >> docker-compose.yml << 'EOF'
-version: '3.8'
-services:
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
-    container_name: elasticsearch
-    environment:
-      - node.name=es-single
-      - cluster.name=es-docker-cluster
-      - discovery.type=single-node
-      - bootstrap.memory_lock=true
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - xpack.security.enabled=false
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - es_data:/usr/share/elasticsearch/data
-    ports:
-      - "9200:9200"
-    networks:
-      - es-net
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.1
-    container_name: kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-    networks:
-      - es-net
-
-volumes:
-  es_data:
-    driver: local
-
-networks:
-  es-net:
-    driver: bridge
-EOF
-```
-
-### 6.2 启动与验证
-
-```bash
-docker-compose up -d
-
-# 验证
-curl http://localhost:9200
-```
-
-### 6.3 三节点 Docker Compose（开启账号密码认证 + TLS，生产级配置基线）
-
-适用场景：
-- 单台宿主机上以多容器方式运行 3 个 Elasticsearch 节点，便于你按“接近生产”的安全配置（TLS + 账号密码）进行验证与演练。
-- 该方案不具备多宿主机容灾能力：宿主机故障会导致整个集群不可用。真正生产环境高可用建议使用多机部署（物理机/VM/K8s）。
-
-本方案已在本仓库生成可直接使用的目录：
-- `compose-3nodes-secure/`：三节点 Compose
-- `compose-3nodes-secure/config/`：生产级配置文件（每节点一份）
-- `compose-3nodes-secure/setup/instances.yml`：证书签发实例清单（包含 `localhost`）
-
-#### 6.3.1 前置条件（宿主机）
-
-Linux 宿主机（推荐）：
-```bash
 sudo sysctl -w vm.max_map_count=262144
 echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
 ```
 
-Docker Desktop（Windows/macOS）：
-- 如果使用 WSL2 后端：在 WSL2 发行版内设置 `vm.max_map_count=262144`，并确保设置可持久化。
+> 📌 注意：如果宿主机没有 sudo 权限，请切换 root 执行上述命令，并确保该参数已持久化。
 
-#### 6.3.2 配置说明
+#### 4.1.2 目录准备（幂等）
 
-1) 修改 `.env`（必须）
-- 路径：`compose-3nodes-secure/.env`
-- 至少需要修改：
-  - `ELASTIC_PASSWORD`：`elastic` 内置超级用户密码（请设置强密码）
-  - `ES_HEAP`：堆大小（例如 `2g`、`4g`，建议为容器可用内存的 50% 且不超过 ~31g）
-
-2) 配置文件（已生成）
-- `compose-3nodes-secure/config/es01.yml`
-- `compose-3nodes-secure/config/es02.yml`
-- `compose-3nodes-secure/config/es03.yml`
-
-配置要点：
-- 开启安全能力：`xpack.security.enabled: true`
-- HTTP/Transport 全链路 TLS：`xpack.security.http.ssl.*`、`xpack.security.transport.ssl.*`
-- 禁止危险操作：`action.destructive_requires_name: true`
-
-#### 6.3.3 启动（三节点）
-
-在目录 `compose-3nodes-secure/` 下执行：
 ```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
+mkdir -p ./certs ./data/es01 ./data/es02 ./data/es03
+```
+
+### 4.2 配置（必须修改）
+
+> 🖥️ **执行节点：宿主机**
+
+编辑 `compose-3nodes-secure/.env`：
+- `ELASTIC_PASSWORD`：★ 必须修改，`elastic` 超级用户密码
+- `ES_HEAP`：⚠️ 根据宿主机可用内存调整（建议为 Docker 可用内存的 50%，且不超过 ~31g）
+- `ES_HTTP_PORT`：⚠️ 端口冲突时修改
+
+`.env` 示例：
+
+```dotenv
+STACK_VERSION=9.3.1
+CLUSTER_NAME=es-3node
+ES_HTTP_PORT=9200
+ES_HEAP=2g
+ELASTIC_PASSWORD=ChangeMe_ThisIsNotSafe
+```
+
+### 4.3 启动（三节点）
+
+> 🖥️ **执行节点：宿主机**
+
+```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
 docker compose up -d
 docker compose ps
 ```
 
-首次启动会自动生成 CA 与节点证书（保存在 Docker volume `certs` 内），随后启动 3 个节点。
+启动过程说明：
+- `setup` 负责生成 Transport TLS 证书到 `certs/`（仅用于节点间 9300 通信）
+- `init-perms` 会为 `data/` 目录设置可写权限（首次部署或清理数据后需要）
+- `es01`/`es02`/`es03` 启动后，通过 9300 端口组成集群
 
-#### 6.3.4 导出 CA 证书（用于本机 curl 校验 HTTPS）
+### 4.4 验证（HTTP）
 
-在 `compose-3nodes-secure/` 下执行：
-```bash
-docker compose cp es01:/usr/share/elasticsearch/config/certs/ca/ca.crt ./ca.crt
-```
+> 🖥️ **执行节点：宿主机**
 
-#### 6.3.5 验证（HTTPS + Basic Auth）
-
-Linux/macOS：
-```bash
-curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200
-curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200/_cat/nodes?v
-curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200/_cluster/health?pretty
-```
-
-Windows PowerShell（注意使用 curl.exe）：
-```powershell
-curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200
-curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200/_cat/nodes?v
-curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200/_cluster/health?pretty
-```
-
-#### 6.3.6 常见问题排查
-
-- 端口占用：修改 `compose-3nodes-secure/.env` 的 `ES_HTTP_PORT`
-- 内存不足：减小 `ES_HEAP`，并确认 Docker 分配给宿主机/WSL 的内存足够
-- 启动失败（内核参数）：确保 `vm.max_map_count=262144`
-- 查看日志：
-  ```bash
-  docker compose logs -f es01
-  ```
-
-## 7. 日常运维操作
-
-### 7.1 常用管理命令
+验证集群健康：
 
 ```bash
-# 查看集群健康状态
-curl -X GET "localhost:9200/_cluster/health?pretty"
-
-# 查看所有节点信息
-curl -X GET "localhost:9200/_cat/nodes?v"
-
-# 查看所有索引
-curl -X GET "localhost:9200/_cat/indices?v"
-
-# 查看分片分配情况
-curl -X GET "localhost:9200/_cat/shards?v"
+curl -s http://localhost:9200 | head -n 1
+curl --fail -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200/_cluster/health?pretty
 ```
 
-### 7.2 备份与恢复
+预期输出（关键字段）：
 
-Elasticsearch 使用 Snapshot API 进行备份，需先配置共享文件系统（如 NFS）或 S3。
+```json
+{
+  "cluster_name" : "es-3node",
+  "status" : "green",
+  "number_of_nodes" : 3,
+  "number_of_data_nodes" : 3
+}
+```
 
-**1. 注册仓库 (Repository)**
+验证节点列表：
+
 ```bash
-curl -X PUT "localhost:9200/_snapshot/my_backup" -H 'Content-Type: application/json' -d'
+curl --fail -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200/_cat/nodes?v
+```
+
+#### 4.4.1 跨主机访问（远程客户端）
+
+远程主机直接通过 HTTP 访问宿主机暴露端口即可：
+
+```bash
+curl --fail -u "elastic:你的密码" http://<HOST_IP_OR_DOMAIN>:9200
+curl --fail -u "elastic:你的密码" http://<HOST_IP_OR_DOMAIN>:9200/_cat/nodes?v
+```
+
+### 4.5 停止与清理
+
+> 🖥️ **执行节点：宿主机**
+
+停止并删除容器（不会删除 `data/`）：
+
+```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
+docker compose down --remove-orphans
+```
+
+清理集群数据（仅清空索引与数据，谨慎执行）：
+
+```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
+docker compose down --remove-orphans
+rm -rf ./data
+```
+
+完全重置（清空数据与 Transport 证书，谨慎执行）：
+
+```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
+docker compose down --remove-orphans
+rm -rf ./data ./certs
+```
+
+### 4.6 复制到新机器部署（推荐流程）
+
+> 🖥️ **执行节点：新宿主机**
+
+迁移原则：
+- 不复制旧机器的 `data/`，在新机器重新初始化数据
+- 不复制旧机器的 `certs/`，在新机器重新生成 Transport TLS 证书
+
+建议只复制以下内容到新机器（保持目录结构不变）：
+- `compose-3nodes-secure/.env`
+- `compose-3nodes-secure/docker-compose.yml`
+- `compose-3nodes-secure/config/`
+- `compose-3nodes-secure/setup/instances.yml`
+
+新机器部署步骤：
+
+```bash
+cd /data/technical-documentation/01-databases/elasticsearch/compose-3nodes-secure
+
+sudo sysctl -w vm.max_map_count=262144
+echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
+
+mkdir -p ./certs ./data/es01 ./data/es02 ./data/es03
+docker compose up -d
+
+curl --fail -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200/_cluster/health?pretty
+```
+
+## 5. 关键配置说明（本仓库版本）
+
+### 5.1 配置文件位置
+
+| 类型 | 路径 |
+| :--- | :--- |
+| Compose | `compose-3nodes-secure/docker-compose.yml` |
+| 环境变量 | `compose-3nodes-secure/.env` |
+| 节点配置 | `compose-3nodes-secure/config/es01.yml` |
+| 节点配置 | `compose-3nodes-secure/config/es02.yml` |
+| 节点配置 | `compose-3nodes-secure/config/es03.yml` |
+| 证书实例清单 | `compose-3nodes-secure/setup/instances.yml` |
+
+### 5.2 安全基线说明
+
+- 本方案启用账号认证（`xpack.security.enabled: true`），HTTP 层不启用 TLS（`xpack.security.http.ssl.enabled: false`）
+- 9200 为 HTTP 明文且需要认证；未带认证访问会返回 401
+- 9300 启用 Transport TLS（节点间加密与身份校验），证书由 `setup` 自动生成并落在 `certs/`
+
+## 6. 日常运维操作
+
+### 6.1 常用命令
+
+```bash
+cd 01-databases/elasticsearch/compose-3nodes-secure
+
+docker compose ps
+docker compose logs -f es01
+
+curl -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200
+curl -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200/_cat/indices?v
+curl -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200/_cat/shards?v
+```
+
+### 6.2 备份与恢复（Snapshot）
+
+Snapshot 需要一个可写的仓库目录（示例以容器内目录为例，真实使用建议挂载独立备份盘或对象存储）。
+
+```bash
+curl -u "elastic:${ELASTIC_PASSWORD}" -X PUT "http://localhost:9200/_snapshot/my_backup" -H 'Content-Type: application/json' -d '
 {
   "type": "fs",
   "settings": {
     "location": "/mnt/backups"
   }
-}
-'
+}'
 ```
 
-**2. 创建快照 (Snapshot)**
-```bash
-# 备份所有索引
-curl -X PUT "localhost:9200/_snapshot/my_backup/snapshot_1?wait_for_completion=true"
-```
+## 7. 使用手册（数据库专项）
 
-**3. 恢复快照**
-```bash
-curl -X POST "localhost:9200/_snapshot/my_backup/snapshot_1/_restore"
-```
-
-### 7.3 集群扩缩容
-- **扩容**：在新节点配置相同的 `cluster.name` 和 `discovery.seed_hosts`，启动后会自动加入集群。
-- **缩容**：先将待下线节点排除，等待数据迁移完成。
-  ```bash
-  PUT _cluster/settings
-  {
-    "transient" : {
-      "cluster.routing.allocation.exclude._ip" : "192.168.1.103"
-    }
-  }
-  ```
-
-### 7.4 版本升级
-推荐使用 **Rolling Upgrade**（滚动升级）：
-1. 停止一个非 Master 节点。
-2. 升级软件包。
-3. 启动节点，等待加入集群。
-4. 确认集群状态变绿。
-5. 重复上述步骤。
-
-## 8. 使用手册（数据库专项）
-
-### 8.1 连接与认证
-如果开启了 Security，需使用 `-u` 参数：
-```bash
-curl -u elastic:password -X GET "http://localhost:9200/"
-```
-
-### 8.2 库/表/索引管理命令
+### 7.1 索引管理
 
 ```bash
-# 创建索引 (相当于建库/表)
-curl -X PUT "localhost:9200/my-index-001" -H 'Content-Type: application/json' -d'
+curl -u "elastic:${ELASTIC_PASSWORD}" -X PUT "http://localhost:9200/my-index-001" -H 'Content-Type: application/json' -d '
 {
   "settings": {
     "number_of_shards": 3,
     "number_of_replicas": 1
   }
-}
-'
+}'
 
-# 删除索引
-curl -X DELETE "localhost:9200/my-index-001"
-
-# 查看索引 Mapping (表结构)
-curl -X GET "localhost:9200/my-index-001/_mapping?pretty"
+curl -u "elastic:${ELASTIC_PASSWORD}" -X GET "http://localhost:9200/my-index-001/_mapping?pretty"
+curl -u "elastic:${ELASTIC_PASSWORD}" -X DELETE "http://localhost:9200/my-index-001"
 ```
 
-### 8.3 数据增删改查（CRUD）
+### 7.2 CRUD 示例
 
 ```bash
-# 插入文档 (Create)
-curl -X POST "localhost:9200/my-index-001/_doc/" -H 'Content-Type: application/json' -d'
+curl -u "elastic:${ELASTIC_PASSWORD}" -X POST "http://localhost:9200/my-index-001/_doc/" -H 'Content-Type: application/json' -d '
 {
   "user": "kimchy",
-  "post_date": "2023-11-15T14:12:12",
+  "post_date": "2026-03-12T00:00:00",
   "message": "trying out Elasticsearch"
-}
-'
+}'
 
-# 根据 ID 查询 (Read)
-curl -X GET "localhost:9200/my-index-001/_doc/<DOC_ID>"
-
-# 简单搜索 (Search)
-curl -X GET "localhost:9200/my-index-001/_search?q=user:kimchy"
-
-# DSL 复杂搜索
-curl -X GET "localhost:9200/my-index-001/_search" -H 'Content-Type: application/json' -d'
-{
-  "query": {
-    "match": {
-      "message": "Elasticsearch"
-    }
-  }
-}
-'
-
-# 更新文档 (Update)
-curl -X POST "localhost:9200/my-index-001/_update/<DOC_ID>" -H 'Content-Type: application/json' -d'
-{
-  "doc": {
-    "message": "updated message"
-  }
-}
-'
-
-# 删除文档 (Delete)
-curl -X DELETE "localhost:9200/my-index-001/_doc/<DOC_ID>"
+curl -u "elastic:${ELASTIC_PASSWORD}" -X GET "http://localhost:9200/my-index-001/_search?q=user:kimchy"
 ```
 
-### 8.4 用户与权限管理 (需开启 Security)
+## 8. 注意事项与生产检查清单
 
-```bash
-# 创建用户
-curl -u elastic -X POST "localhost:9200/_security/user/jdoe" -H 'Content-Type: application/json' -d'
-{
-  "password" : "userpassword",
-  "roles" : [ "monitoring_user" ],
-  "full_name" : "John Doe"
-}
-'
-```
+### 8.1 启动前检查
 
-### 8.5 性能查询与慢查询分析
+- [ ] `sysctl vm.max_map_count` 输出不小于 `262144`
+- [ ] 宿主机可用内存满足 `ES_HEAP * 3`，并留有余量给文件缓存与系统
+- [ ] `ES_HTTP_PORT` 未被占用（默认 9200）
+- [ ] `ELASTIC_PASSWORD` 已替换默认弱密码
+- [ ] `compose-3nodes-secure/data/` 位于足够性能与容量的磁盘上
 
-**设置慢查询日志阈值：**
-```bash
-curl -X PUT "localhost:9200/my-index-001/_settings" -H 'Content-Type: application/json' -d'
-{
-  "index.search.slowlog.threshold.query.warn": "10s",
-  "index.search.slowlog.threshold.query.info": "5s",
-  "index.search.slowlog.threshold.fetch.warn": "1s"
-}
-'
-```
-日志位置：`/var/log/elasticsearch/my-es-cluster_index_search_slowlog.log`
+### 8.2 常见问题排查（现象 → 原因 → 排查步骤 → 解决方案）
 
-### 8.6 备份恢复命令
-> 见 7.2 节。
+**现象：`es01` 退出，日志包含 `vm.max_map_count [65530] is too low`**
+- 原因：bootstrap checks 未通过
+- 排查步骤：`sysctl vm.max_map_count`
+- 解决方案：
+  ```bash
+  sudo sysctl -w vm.max_map_count=262144
+  echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
+  ```
 
-### 8.7 主从/集群状态监控命令
+**现象：curl 返回 401，提示 `missing authentication credentials`**
+- 原因：已启用账号认证，但请求未携带账号密码
+- 解决方案：
+  ```bash
+  curl -u "elastic:${ELASTIC_PASSWORD}" http://localhost:9200
+  ```
 
-```bash
-# 监控集群健康 (含颜色 green/yellow/red)
-watch -n 1 'curl -s localhost:9200/_cluster/health?pretty'
+**现象：`setup` 一直不健康或节点启动失败**
+- 原因：Transport TLS 证书未生成或 `certs/` 权限不正确
+- 排查步骤：
+  ```bash
+  docker compose ps
+  docker compose logs --tail=200 setup
+  ```
+- 解决方案：
+  ```bash
+  docker compose down --remove-orphans
+  rm -rf ./certs
+  docker compose up -d
+  ```
 
-# 监控节点堆内存使用
-curl -s localhost:9200/_cat/nodes?v&h=name,heap.percent,ram.percent,cpu
-```
+**现象：启动后节点未凑齐 3 个，健康状态 `yellow/red`**
+- 原因：节点未正常加入集群或资源不足导致 OOM/重启
+- 排查步骤：
+  ```bash
+  docker compose logs --tail=200 es01
+  docker compose logs --tail=200 es02
+  docker compose logs --tail=200 es03
+  ```
+- 解决方案：
+  - 降低 `.env` 的 `ES_HEAP`
+  - 释放宿主机内存或提高 Docker 可用内存
 
-### 8.8 生产常见故障处理命令
+## 9. 安全加固建议（生产参考）
 
-**场景：集群变红 (Red)**
-说明有主分片丢失。
-```bash
-# 查看未分配分片的原因
-curl -X GET "localhost:9200/_cluster/allocation/explain?pretty"
-```
-
-**场景：集群变黄 (Yellow)**
-说明有副本分片未分配（通常是节点数不足以分配副本）。
-```bash
-# 临时将副本数设为 0 (仅用于单节点恢复绿灯)
-curl -X PUT "localhost:9200/*/_settings" -H 'Content-Type: application/json' -d'
-{
-    "index" : {
-        "number_of_replicas" : 0
-    }
-}
-'
-```
-
-## 9. 注意事项与生产检查清单
-
-### 9.1 安装前环境核查
-- [ ] **JDK 版本**：确认是否使用内置 JDK 或系统 JDK 版本兼容。
-- [ ] **内存**：确认物理内存充足，且 Swap 已禁用。
-- [ ] **磁盘**：确认数据盘为 SSD，且剩余空间 > 20%。
-- [ ] **内核参数**：`vm.max_map_count` 是否已修改 (> 262144)。
-- [ ] **文件句柄**：`ulimit -n` 是否 > 65535。
-
-### 9.2 常见故障排查
-
-**报错：master_not_discovered_exception**
-- **原因**：无法找到主节点，通常是网络不通或 `discovery.seed_hosts` 配置错误。
-- **排查**：检查防火墙端口 9300 是否开放，检查 `cluster.name` 是否一致。
-
-**报错：max virtual memory areas vm.max_map_count [65530] is too low**
-- **解决**：执行 `sysctl -w vm.max_map_count=262144` 并写入 `/etc/sysctl.conf`。
-
-### 9.3 安全加固建议
-- **开启 TLS**：节点间通信 (Transport) 和 HTTP 接口均应启用 TLS 加密。
-- **启用 RBAC**：使用 Role-Based Access Control 限制用户权限。
-- **网络隔离**：9200 端口不要直接暴露在公网，使用 Nginx 反向代理并配置 IP 白名单。
-- **定期备份**：配置 SLM (Snapshot Lifecycle Management) 自动备份。
+- 本文档启用了账号认证，但 HTTP 明文传输，生产环境不建议使用
+- 生产建议启用 HTTPS（HTTP TLS）并通过内网/网关访问 9200
 
 ## 10. 参考资料
+
 - [Elasticsearch 官方文档](https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html)
-- [Elasticsearch 生产环境配置建议](https://www.elastic.co/guide/en/elasticsearch/reference/current/system-config.html)
+- [Bootstrap checks](https://www.elastic.co/docs/deploy-manage/deploy/self-managed/bootstrap-checks)
