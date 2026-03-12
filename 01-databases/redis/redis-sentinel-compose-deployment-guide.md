@@ -14,6 +14,36 @@
 - **Sentinel 集群**：`redis-sentinel-1/2/3`（Quorum=2）
 - **HAProxy**：对外只暴露一个固定入口 `6379`，自动转发到当前主库
 
+架构图（对外固定入口 + 内部哨兵选主）：
+
+```mermaid
+flowchart LR
+  Client[远程客户端/应用] -->|TCP 6379 + 密码| HA[HAProxy\n宿主机:6379]
+
+  subgraph HOST[宿主机（Docker）]
+    subgraph NET[redis-net（bridge 固定网段）]
+      M[(redis-master\n初始主\n172.28.0.2:6379)]
+      R1[(redis-replica-1\n从\n172.28.0.3:6379)]
+      R2[(redis-replica-2\n从\n172.28.0.4:6379)]
+
+      S1[[sentinel-1\n172.28.0.11:26379]]
+      S2[[sentinel-2\n172.28.0.12:26379]]
+      S3[[sentinel-3\n172.28.0.13:26379]]
+
+      HA -->|转发到当前 master| M
+      HA -->|转发到当前 master| R1
+      HA -->|转发到当前 master| R2
+
+      M -->|复制| R1
+      M -->|复制| R2
+
+      S1 -->|监控/投票| M
+      S2 -->|监控/投票| M
+      S3 -->|监控/投票| M
+    end
+  end
+```
+
 端口与访问方式：
 
 - 客户端读写：连接宿主机 `6379`（HAProxy），使用密码认证
@@ -106,6 +136,31 @@ docker compose ps
 
 ## 6. 验证与使用
 
+### 6.0 访问方式（本机/远程）
+
+对外暴露端口（宿主机）：
+
+| 入口 | 端口 | 用途 | 是否必须 | 认证方式 |
+|---|---:|---|---|---|
+| HAProxy | 6379 | 业务读写固定入口（自动跟随主库） | 必须 | `AUTH <REDIS_PASSWORD>` |
+| Sentinel-1 | 26379 | 查询 master/订阅事件/运维 | 可选 | `AUTH <REDIS_PASSWORD>` |
+| Sentinel-2 | 26380 | 同上 | 可选 | `AUTH <REDIS_PASSWORD>` |
+| Sentinel-3 | 26381 | 同上 | 可选 | `AUTH <REDIS_PASSWORD>` |
+
+远程访问示例（在任意客户端机器执行）：
+
+```bash
+redis-cli -h <宿主机IP> -p 6379 -a "<REDIS_PASSWORD>" PING
+redis-cli -h <宿主机IP> -p 6379 -a "<REDIS_PASSWORD>" SET k v
+redis-cli -h <宿主机IP> -p 6379 -a "<REDIS_PASSWORD>" GET k
+```
+
+Sentinel 查询示例（可选）：
+
+```bash
+redis-cli -h <宿主机IP> -p 26379 -a "<REDIS_PASSWORD>" SENTINEL get-master-addr-by-name mymaster
+```
+
 ### 6.1 验证固定入口（HAProxy 6379）
 
 ```bash
@@ -194,8 +249,23 @@ docker compose logs -f redis-master
 docker compose logs -f redis-sentinel-1
 docker compose logs -f haproxy
 
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" ROLE
 redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" INFO replication
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" INFO persistence | sed -n '1,80p'
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" INFO memory | sed -n '1,60p'
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" DBSIZE
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" LATENCY latest
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" SLOWLOG len
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" SLOWLOG get 10
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" CLIENT list | head -n 20
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" CONFIG get maxmemory
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" CONFIG get maxmemory-policy
+
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" PING
 redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL masters
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL get-master-addr-by-name "$SENTINEL_MASTER_NAME"
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL slaves "$SENTINEL_MASTER_NAME"
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL sentinels "$SENTINEL_MASTER_NAME"
 ```
 
 ---
@@ -206,4 +276,46 @@ redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL masters
 cd /data/technical-documentation/01-databases/redis/compose-sentinel
 docker compose down --remove-orphans
 rm -rf ./data
+```
+
+---
+
+## 11. 常见维护场景
+
+### 11.1 备份（RDB/AOF）
+
+触发一次 RDB 快照（需要磁盘空间足够）：
+
+```bash
+set -a && . ./.env && set +a
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" BGSAVE
+```
+
+查看 AOF/RDB 状态：
+
+```bash
+set -a && . ./.env && set +a
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" INFO persistence | sed -n '1,120p'
+```
+
+### 11.2 查看当前主库（通过 Sentinel）
+
+```bash
+set -a && . ./.env && set +a
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL get-master-addr-by-name "$SENTINEL_MASTER_NAME"
+```
+
+### 11.3 计划内切主（演练/维护）
+
+```bash
+set -a && . ./.env && set +a
+redis-cli -h 127.0.0.1 -p 26379 -a "$REDIS_PASSWORD" SENTINEL failover "$SENTINEL_MASTER_NAME"
+```
+
+### 11.4 排查连接与慢查询
+
+```bash
+set -a && . ./.env && set +a
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" CLIENT list | head -n 50
+redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD" SLOWLOG get 20
 ```
