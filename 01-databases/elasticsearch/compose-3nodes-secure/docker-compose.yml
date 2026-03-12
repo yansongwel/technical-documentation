@@ -1,0 +1,120 @@
+name: es-secure-3node
+
+services:
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: es-setup
+    user: "0"
+    working_dir: /usr/share/elasticsearch
+    command: >
+      bash -c '
+        if [ ! -f config/certs/ca/ca.crt ]; then
+          mkdir -p config/certs;
+          cp /tmp/instances.yml config/certs/instances.yml;
+          bin/elasticsearch-certutil ca --silent --pem -out config/certs/ca.zip;
+          unzip -q config/certs/ca.zip -d config/certs;
+          bin/elasticsearch-certutil cert --silent --pem
+            --in config/certs/instances.yml
+            --ca-cert config/certs/ca/ca.crt
+            --ca-key config/certs/ca/ca.key
+            -out config/certs/certs.zip;
+          unzip -q config/certs/certs.zip -d config/certs;
+        fi;
+        chown -R root:root config/certs;
+        find config/certs -type d -exec chmod 750 {} \;;
+        find config/certs -type f -exec chmod 640 {} \;;
+      '
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - ./setup/instances.yml:/tmp/instances.yml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f config/certs/es01/es01.crt"]
+      interval: 2s
+      timeout: 10s
+      retries: 120
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: es01
+    depends_on:
+      setup:
+        condition: service_healthy
+    environment:
+      - cluster.name=${CLUSTER_NAME}
+      - bootstrap.memory_lock=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - "ES_JAVA_OPTS=-Xms${ES_HEAP} -Xmx${ES_HEAP}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata01:/usr/share/elasticsearch/data
+      - ./config/es01.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+    ports:
+      - "${ES_HTTP_PORT}:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s --cacert config/certs/ca/ca.crt https://localhost:9200 | grep -q \"missing authentication credentials\""]
+      interval: 10s
+      timeout: 10s
+      retries: 120
+
+  es02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: es02
+    depends_on:
+      es01:
+        condition: service_healthy
+    environment:
+      - cluster.name=${CLUSTER_NAME}
+      - bootstrap.memory_lock=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - "ES_JAVA_OPTS=-Xms${ES_HEAP} -Xmx${ES_HEAP}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata02:/usr/share/elasticsearch/data
+      - ./config/es02.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+
+  es03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    container_name: es03
+    depends_on:
+      es01:
+        condition: service_healthy
+    environment:
+      - cluster.name=${CLUSTER_NAME}
+      - bootstrap.memory_lock=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - "ES_JAVA_OPTS=-Xms${ES_HEAP} -Xmx${ES_HEAP}"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      - certs:/usr/share/elasticsearch/config/certs
+      - esdata03:/usr/share/elasticsearch/data
+      - ./config/es03.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+
+volumes:
+  certs:
+    driver: local
+  esdata01:
+    driver: local
+  esdata02:
+    driver: local
+  esdata03:
+    driver: local

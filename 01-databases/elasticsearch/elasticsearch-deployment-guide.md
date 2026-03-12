@@ -348,6 +348,89 @@ docker-compose up -d
 curl http://localhost:9200
 ```
 
+### 6.3 三节点 Docker Compose（开启账号密码认证 + TLS，生产级配置基线）
+
+适用场景：
+- 单台宿主机上以多容器方式运行 3 个 Elasticsearch 节点，便于你按“接近生产”的安全配置（TLS + 账号密码）进行验证与演练。
+- 该方案不具备多宿主机容灾能力：宿主机故障会导致整个集群不可用。真正生产环境高可用建议使用多机部署（物理机/VM/K8s）。
+
+本方案已在本仓库生成可直接使用的目录：
+- `compose-3nodes-secure/`：三节点 Compose
+- `compose-3nodes-secure/config/`：生产级配置文件（每节点一份）
+- `compose-3nodes-secure/setup/instances.yml`：证书签发实例清单（包含 `localhost`）
+
+#### 6.3.1 前置条件（宿主机）
+
+Linux 宿主机（推荐）：
+```bash
+sudo sysctl -w vm.max_map_count=262144
+echo "vm.max_map_count=262144" | sudo tee -a /etc/sysctl.conf
+```
+
+Docker Desktop（Windows/macOS）：
+- 如果使用 WSL2 后端：在 WSL2 发行版内设置 `vm.max_map_count=262144`，并确保设置可持久化。
+
+#### 6.3.2 配置说明
+
+1) 修改 `.env`（必须）
+- 路径：`compose-3nodes-secure/.env`
+- 至少需要修改：
+  - `ELASTIC_PASSWORD`：`elastic` 内置超级用户密码（请设置强密码）
+  - `ES_HEAP`：堆大小（例如 `2g`、`4g`，建议为容器可用内存的 50% 且不超过 ~31g）
+
+2) 配置文件（已生成）
+- `compose-3nodes-secure/config/es01.yml`
+- `compose-3nodes-secure/config/es02.yml`
+- `compose-3nodes-secure/config/es03.yml`
+
+配置要点：
+- 开启安全能力：`xpack.security.enabled: true`
+- HTTP/Transport 全链路 TLS：`xpack.security.http.ssl.*`、`xpack.security.transport.ssl.*`
+- 禁止危险操作：`action.destructive_requires_name: true`
+
+#### 6.3.3 启动（三节点）
+
+在目录 `compose-3nodes-secure/` 下执行：
+```bash
+docker compose up -d
+docker compose ps
+```
+
+首次启动会自动生成 CA 与节点证书（保存在 Docker volume `certs` 内），随后启动 3 个节点。
+
+#### 6.3.4 导出 CA 证书（用于本机 curl 校验 HTTPS）
+
+在 `compose-3nodes-secure/` 下执行：
+```bash
+docker compose cp es01:/usr/share/elasticsearch/config/certs/ca/ca.crt ./ca.crt
+```
+
+#### 6.3.5 验证（HTTPS + Basic Auth）
+
+Linux/macOS：
+```bash
+curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200
+curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200/_cat/nodes?v
+curl --cacert ./ca.crt -u "elastic:${ELASTIC_PASSWORD}" https://localhost:9200/_cluster/health?pretty
+```
+
+Windows PowerShell（注意使用 curl.exe）：
+```powershell
+curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200
+curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200/_cat/nodes?v
+curl.exe --cacert .\ca.crt -u "elastic:你的密码" https://localhost:9200/_cluster/health?pretty
+```
+
+#### 6.3.6 常见问题排查
+
+- 端口占用：修改 `compose-3nodes-secure/.env` 的 `ES_HTTP_PORT`
+- 内存不足：减小 `ES_HEAP`，并确认 Docker 分配给宿主机/WSL 的内存足够
+- 启动失败（内核参数）：确保 `vm.max_map_count=262144`
+- 查看日志：
+  ```bash
+  docker compose logs -f es01
+  ```
+
 ## 7. 日常运维操作
 
 ### 7.1 常用管理命令
