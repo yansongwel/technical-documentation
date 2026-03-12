@@ -1,0 +1,15 @@
+port __SENTINEL_PORT__
+bind 0.0.0.0
+protected-mode yes
+daemonize no
+logfile ""
+
+dir /data
+
+sentinel monitor __SENTINEL_MASTER_NAME__ __SENTINEL_MASTER_HOST__ __SENTINEL_MASTER_PORT__ __SENTINEL_QUORUM__
+sentinel down-after-milliseconds __SENTINEL_MASTER_NAME__ __SENTINEL_DOWN_AFTER_MS__
+sentinel failover-timeout __SENTINEL_MASTER_NAME__ __SENTINEL_FAILOVER_TIMEOUT_MS__
+sentinel parallel-syncs __SENTINEL_MASTER_NAME__ __SENTINEL_PARALLEL_SYNCS__
+
+sentinel auth-pass __SENTINEL_MASTER_NAME__ __REDIS_PASSWORD__
+requirepass __REDIS_PASSWORD__

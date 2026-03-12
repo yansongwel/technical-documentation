@@ -1,0 +1,30 @@
+global
+  maxconn 20000
+
+defaults
+  mode tcp
+  timeout connect 5s
+  timeout client  1m
+  timeout server  1m
+  timeout check   5s
+
+frontend redis
+  bind :6379
+  default_backend redis_master
+
+backend redis_master
+  mode tcp
+  balance first
+  option tcp-check
+  tcp-check connect
+  tcp-check send "AUTH __REDIS_PASSWORD__\r\n"
+  tcp-check expect string +OK
+  tcp-check send "PING\r\n"
+  tcp-check expect string +PONG
+  tcp-check send "INFO replication\r\n"
+  tcp-check expect string role:master
+  tcp-check send "QUIT\r\n"
+  tcp-check expect string +OK
+  server redis1 172.28.0.2:6379 check inter 2s fall 3 rise 2
+  server redis2 172.28.0.3:6379 check inter 2s fall 3 rise 2
+  server redis3 172.28.0.4:6379 check inter 2s fall 3 rise 2

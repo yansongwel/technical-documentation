@@ -1,0 +1,273 @@
+name: redis-sentinel
+
+services:
+  redis-master:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-master
+    restart: unless-stopped
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    command: >
+      sh -c '
+        sed "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" /etc/redis/redis-master.conf.template > /etc/redis/redis.conf
+        exec redis-server /etc/redis/redis.conf
+      '
+    volumes:
+      - ./config/redis-master.conf.template:/etc/redis/redis-master.conf.template:ro
+      - ./data/master:/data
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    sysctls:
+      net.core.somaxconn: 1024
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.2
+
+  haproxy:
+    image: haproxy:${HAPROXY_VERSION}
+    container_name: redis-haproxy
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    command: >
+      sh -c '
+        sed "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" /usr/local/etc/haproxy/haproxy.cfg.template > /tmp/haproxy.cfg
+        exec haproxy -W -db -f /tmp/haproxy.cfg
+      '
+    volumes:
+      - ./config/haproxy.cfg.template:/usr/local/etc/haproxy/haproxy.cfg.template:ro
+    ports:
+      - "6379:6379"
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    healthcheck:
+      test: ["CMD-SHELL", "haproxy -c -f /tmp/haproxy.cfg"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.20
+
+  redis-replica-1:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-replica-1
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_MASTER_HOST=172.28.0.2
+      - REDIS_MASTER_PORT=6379
+    command: >
+      sh -c '
+        sed -e "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" -e "s/__REDIS_MASTER_HOST__/$$REDIS_MASTER_HOST/g" -e "s/__REDIS_MASTER_PORT__/$$REDIS_MASTER_PORT/g" /etc/redis/redis-replica.conf.template > /etc/redis/redis.conf
+        exec redis-server /etc/redis/redis.conf
+      '
+    volumes:
+      - ./config/redis-replica.conf.template:/etc/redis/redis-replica.conf.template:ro
+      - ./data/replica-1:/data
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    sysctls:
+      net.core.somaxconn: 1024
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.3
+
+  redis-replica-2:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-replica-2
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_MASTER_HOST=172.28.0.2
+      - REDIS_MASTER_PORT=6379
+    command: >
+      sh -c '
+        sed -e "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" -e "s/__REDIS_MASTER_HOST__/$$REDIS_MASTER_HOST/g" -e "s/__REDIS_MASTER_PORT__/$$REDIS_MASTER_PORT/g" /etc/redis/redis-replica.conf.template > /etc/redis/redis.conf
+        exec redis-server /etc/redis/redis.conf
+      '
+    volumes:
+      - ./config/redis-replica.conf.template:/etc/redis/redis-replica.conf.template:ro
+      - ./data/replica-2:/data
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    sysctls:
+      net.core.somaxconn: 1024
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.4
+
+  redis-sentinel-1:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-sentinel-1
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - SENTINEL_MASTER_NAME=${SENTINEL_MASTER_NAME}
+      - SENTINEL_MASTER_HOST=172.28.0.2
+      - SENTINEL_MASTER_PORT=6379
+      - SENTINEL_QUORUM=${SENTINEL_QUORUM}
+      - SENTINEL_DOWN_AFTER_MS=${SENTINEL_DOWN_AFTER_MS}
+      - SENTINEL_FAILOVER_TIMEOUT_MS=${SENTINEL_FAILOVER_TIMEOUT_MS}
+      - SENTINEL_PARALLEL_SYNCS=${SENTINEL_PARALLEL_SYNCS}
+      - SENTINEL_PORT=26379
+    command: >
+      sh -c '
+        sed -e "s/__SENTINEL_PORT__/$$SENTINEL_PORT/g" -e "s/__SENTINEL_MASTER_NAME__/$$SENTINEL_MASTER_NAME/g" -e "s/__SENTINEL_MASTER_HOST__/$$SENTINEL_MASTER_HOST/g" -e "s/__SENTINEL_MASTER_PORT__/$$SENTINEL_MASTER_PORT/g" -e "s/__SENTINEL_QUORUM__/$$SENTINEL_QUORUM/g" -e "s/__SENTINEL_DOWN_AFTER_MS__/$$SENTINEL_DOWN_AFTER_MS/g" -e "s/__SENTINEL_FAILOVER_TIMEOUT_MS__/$$SENTINEL_FAILOVER_TIMEOUT_MS/g" -e "s/__SENTINEL_PARALLEL_SYNCS__/$$SENTINEL_PARALLEL_SYNCS/g" -e "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" /etc/redis/sentinel.conf.template > /etc/redis/sentinel.conf
+        exec redis-sentinel /etc/redis/sentinel.conf
+      '
+    volumes:
+      - ./config/sentinel.conf.template:/etc/redis/sentinel.conf.template:ro
+      - ./data/sentinel-1:/data
+    ports:
+      - "26379:26379"
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.11
+
+  redis-sentinel-2:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-sentinel-2
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - SENTINEL_MASTER_NAME=${SENTINEL_MASTER_NAME}
+      - SENTINEL_MASTER_HOST=172.28.0.2
+      - SENTINEL_MASTER_PORT=6379
+      - SENTINEL_QUORUM=${SENTINEL_QUORUM}
+      - SENTINEL_DOWN_AFTER_MS=${SENTINEL_DOWN_AFTER_MS}
+      - SENTINEL_FAILOVER_TIMEOUT_MS=${SENTINEL_FAILOVER_TIMEOUT_MS}
+      - SENTINEL_PARALLEL_SYNCS=${SENTINEL_PARALLEL_SYNCS}
+      - SENTINEL_PORT=26379
+    command: >
+      sh -c '
+        sed -e "s/__SENTINEL_PORT__/$$SENTINEL_PORT/g" -e "s/__SENTINEL_MASTER_NAME__/$$SENTINEL_MASTER_NAME/g" -e "s/__SENTINEL_MASTER_HOST__/$$SENTINEL_MASTER_HOST/g" -e "s/__SENTINEL_MASTER_PORT__/$$SENTINEL_MASTER_PORT/g" -e "s/__SENTINEL_QUORUM__/$$SENTINEL_QUORUM/g" -e "s/__SENTINEL_DOWN_AFTER_MS__/$$SENTINEL_DOWN_AFTER_MS/g" -e "s/__SENTINEL_FAILOVER_TIMEOUT_MS__/$$SENTINEL_FAILOVER_TIMEOUT_MS/g" -e "s/__SENTINEL_PARALLEL_SYNCS__/$$SENTINEL_PARALLEL_SYNCS/g" -e "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" /etc/redis/sentinel.conf.template > /etc/redis/sentinel.conf
+        exec redis-sentinel /etc/redis/sentinel.conf
+      '
+    volumes:
+      - ./config/sentinel.conf.template:/etc/redis/sentinel.conf.template:ro
+      - ./data/sentinel-2:/data
+    ports:
+      - "26380:26379"
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.12
+
+  redis-sentinel-3:
+    image: redis:${REDIS_VERSION}
+    container_name: redis-sentinel-3
+    restart: unless-stopped
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - SENTINEL_MASTER_NAME=${SENTINEL_MASTER_NAME}
+      - SENTINEL_MASTER_HOST=172.28.0.2
+      - SENTINEL_MASTER_PORT=6379
+      - SENTINEL_QUORUM=${SENTINEL_QUORUM}
+      - SENTINEL_DOWN_AFTER_MS=${SENTINEL_DOWN_AFTER_MS}
+      - SENTINEL_FAILOVER_TIMEOUT_MS=${SENTINEL_FAILOVER_TIMEOUT_MS}
+      - SENTINEL_PARALLEL_SYNCS=${SENTINEL_PARALLEL_SYNCS}
+      - SENTINEL_PORT=26379
+    command: >
+      sh -c '
+        sed -e "s/__SENTINEL_PORT__/$$SENTINEL_PORT/g" -e "s/__SENTINEL_MASTER_NAME__/$$SENTINEL_MASTER_NAME/g" -e "s/__SENTINEL_MASTER_HOST__/$$SENTINEL_MASTER_HOST/g" -e "s/__SENTINEL_MASTER_PORT__/$$SENTINEL_MASTER_PORT/g" -e "s/__SENTINEL_QUORUM__/$$SENTINEL_QUORUM/g" -e "s/__SENTINEL_DOWN_AFTER_MS__/$$SENTINEL_DOWN_AFTER_MS/g" -e "s/__SENTINEL_FAILOVER_TIMEOUT_MS__/$$SENTINEL_FAILOVER_TIMEOUT_MS/g" -e "s/__SENTINEL_PARALLEL_SYNCS__/$$SENTINEL_PARALLEL_SYNCS/g" -e "s/__REDIS_PASSWORD__/$$REDIS_PASSWORD/g" /etc/redis/sentinel.conf.template > /etc/redis/sentinel.conf
+        exec redis-sentinel /etc/redis/sentinel.conf
+      '
+    volumes:
+      - ./config/sentinel.conf.template:/etc/redis/sentinel.conf.template:ro
+      - ./data/sentinel-3:/data
+    ports:
+      - "26381:26379"
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -p 26379 -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      redis-net:
+        ipv4_address: 172.28.0.13
+
+networks:
+  redis-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

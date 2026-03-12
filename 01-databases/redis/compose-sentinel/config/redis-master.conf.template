@@ -1,0 +1,50 @@
+bind 0.0.0.0
+port 6379
+protected-mode yes
+
+daemonize no
+supervised no
+loglevel notice
+logfile ""
+
+tcp-backlog 1024
+timeout 0
+tcp-keepalive 300
+
+databases 16
+
+save 900 1
+save 300 10
+save 60 10000
+
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+dir /data
+
+appendonly yes
+appendfilename "appendonly.aof"
+appendfsync everysec
+no-appendfsync-on-rewrite no
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-use-rdb-preamble yes
+aof-load-truncated yes
+
+lazyfree-lazy-eviction yes
+lazyfree-lazy-expire yes
+lazyfree-lazy-server-del yes
+replica-lazy-flush yes
+
+replica-serve-stale-data yes
+replica-read-only yes
+repl-diskless-sync yes
+repl-diskless-sync-delay 5
+repl-backlog-size 64mb
+
+maxclients 20000
+
+activedefrag yes
+
+requirepass __REDIS_PASSWORD__
