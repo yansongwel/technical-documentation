@@ -1,0 +1,64 @@
+name: mysql-replication
+
+services:
+  mysql-master:
+    image: mysql:${MYSQL_VERSION}
+    container_name: mysql-master
+    restart: unless-stopped
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_USER=${MYSQL_USER}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+      - MYSQL_REPLICATION_USER=${MYSQL_REPLICATION_USER}
+      - MYSQL_REPLICATION_PASSWORD=${MYSQL_REPLICATION_PASSWORD}
+      - TZ=Asia/Shanghai
+    command: ["mysqld", "--defaults-file=/etc/mysql/conf.d/my.cnf"]
+    volumes:
+      - mysql-master-data:/var/lib/mysql
+      - ./config/master/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - ./init/master:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "3306:3306"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --socket=/var/lib/mysql/mysql.sock -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  mysql-replica:
+    image: mysql:${MYSQL_VERSION}
+    container_name: mysql-replica
+    restart: unless-stopped
+    depends_on:
+      mysql-master:
+        condition: service_healthy
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_REPLICATION_USER=${MYSQL_REPLICATION_USER}
+      - MYSQL_REPLICATION_PASSWORD=${MYSQL_REPLICATION_PASSWORD}
+      - TZ=Asia/Shanghai
+    command: ["mysqld", "--defaults-file=/etc/mysql/conf.d/my.cnf"]
+    volumes:
+      - mysql-replica-data:/var/lib/mysql
+      - ./config/replica/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+      - ./init/replica:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "3307:3306"
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping --socket=/var/lib/mysql/mysql.sock -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+volumes:
+  mysql-master-data:
+  mysql-replica-data:

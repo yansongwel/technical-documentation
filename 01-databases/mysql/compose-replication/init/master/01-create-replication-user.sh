@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+(
+  set -euo pipefail
+  mysql --socket=/var/lib/mysql/mysql.sock -uroot -p"${MYSQL_ROOT_PASSWORD}" <<SQL
+CREATE USER IF NOT EXISTS '${MYSQL_REPLICATION_USER}'@'%' IDENTIFIED BY '${MYSQL_REPLICATION_PASSWORD}';
+GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO '${MYSQL_REPLICATION_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL
+)
