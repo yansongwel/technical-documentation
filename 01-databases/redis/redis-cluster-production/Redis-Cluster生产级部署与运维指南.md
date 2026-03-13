@@ -1,37 +1,39 @@
 ---
-title: Redis Cluster 生产级部署与运维指南
+title: Redis-Cluster 生产级部署与运维指南
 author: devinyan
 updated: 2026-03-13
-version: v1.0
-redis_version: 8.6.1
+version: v2.0
+middleware_version: 8.6.1
+cluster_mode: Cluster
+verified: true
 ---
 
 > [TOC]
 
-# Redis Cluster 生产级部署与运维指南
+# Redis-Cluster 生产级部署与运维指南
 
 ## 1. 简介
 
 ### 1.1 服务介绍与核心特性
 
-Redis（Remote Dictionary Server）是高性能的内存数据结构存储系统，支持字符串、哈希、列表、集合、有序集合、位图、HyperLogLog、Stream 等数据结构。
+Redis（Remote Dictionary Server）是高性能内存数据结构存储系统，支持 String、Hash、List、Set、Sorted Set、Bitmap、HyperLogLog、Stream 等数据结构。
 
-Redis Cluster 是 Redis 官方提供的分布式方案，核心特性：
+Redis Cluster 是 Redis 官方提供的分布式分片方案，核心特性：
 
 - **数据分片**：16384 个哈希槽（hash slot）自动分配到多个主节点，支持水平扩展
-- **高可用**：每个主节点配备从节点，主节点故障时自动 failover
+- **高可用**：每个主节点配备从节点，主节点故障时自动 failover（秒级切换）
 - **去中心化**：Gossip 协议实现节点间通信，无单点故障
-- **线性扩展**：支持在线添加/移除节点，自动 slot 迁移
+- **线性扩展**：支持在线添加/移除节点，自动 slot 迁移，业务无感知
 - **原子操作**：同一 slot 内支持 MULTI/EXEC 事务和 Lua 脚本
 
 ### 1.2 适用场景
 
 | 场景 | 说明 |
 |------|------|
-| 高并发缓存 | 电商秒杀、热点数据缓存，QPS 10万+ |
+| 高并发缓存 | 电商秒杀、热点数据缓存，单集群 QPS 10万+ |
 | 会话存储 | 分布式 Session 共享，支持 TTL 自动过期 |
 | 排行榜/计数器 | Sorted Set 实现实时排行，原子 INCR 计数 |
-| 消息队列 | Stream 数据结构实现轻量级消息队列 |
+| 消息队列 | Stream 数据结构实现轻量级消息队列（含消费者组） |
 | 分布式锁 | Redlock 算法实现跨节点分布式锁 |
 | 实时数据分析 | HyperLogLog 基数统计、Bitmap 用户行为分析 |
 
@@ -46,7 +48,7 @@ graph TB
         APP --> SDK
     end
 
-    subgraph Cluster["Redis Cluster (6 节点)"]
+    subgraph Cluster["Redis Cluster（6 节点 · 3 主 3 从）"]
         style Cluster fill:#fff3e0,stroke:#f57c00
 
         subgraph Master1["Master-01<br/>Slot 0-5460"]
@@ -89,14 +91,15 @@ graph TB
 
 ### 1.4 版本说明
 
-> 以下版本号均通过实际查询确认（GitHub Releases API + Docker Hub），非凭记忆填写。
+> 以下版本号均通过 GitHub Releases API + Docker Hub 实际查询确认。
 
 | 组件 | 版本 | 兼容性 |
 |------|------|--------|
 | **Redis Server** | 8.6.1（2026-03 最新稳定版） | Linux x86_64 / ARM64 |
 | **Redis CLI** | 随 Redis Server 一同安装 | — |
-| **操作系统** | Rocky Linux 9.x / Ubuntu 22.04 LTS | 内核 ≥ 5.4 |
-| **GCC**（源码编译时） | ≥ 9.0 | Rocky 9 自带 11.x |
+| **redis_exporter** | v1.82.0（Prometheus 指标导出） | 兼容 Redis 5.x-8.x |
+| **操作系统** | Rocky Linux 9.x / Ubuntu 22.04 LTS 或 24.04 LTS | 内核 ≥ 5.4 |
+| **GCC**（源码编译） | ≥ 9.0 | Rocky 9 自带 11.x |
 
 ---
 
@@ -106,17 +109,19 @@ graph TB
 
 | Redis 大版本 | 发布周期 | Cluster 支持 | 关键特性 |
 |-------------|---------|-------------|---------|
-| 8.x（当前） | 2025+ | 完整支持 | 新版模块系统、性能优化、hash slot 迁移增强 |
-| 7.x | 2022-2025 | 完整支持 | ACL v2、Function、Sharded Pub/Sub、Multi-part AOF |
-| 6.x | 2020-2022 | 完整支持 | ACL、SSL/TLS、RESP3 协议 |
+| **8.x**（当前） | 2025+ | 完整支持 | 多线程 I/O 增强（`io-threads-do-reads` 已默认合并）、性能优化、hash slot 迁移增强、`latency-tracking` 内置 |
+| **7.x** | 2022-2025 | 完整支持 | ACL v2、Function、Sharded Pub/Sub、Multi-part AOF |
+| **6.x** | 2020-2022 | 完整支持 | ACL v1、SSL/TLS、RESP3 协议 |
+
+> 📌 注意：Redis 8.x 移除了 `io-threads-do-reads` 参数（读操作已默认使用多线程），从 7.x 升级时需在配置文件中删除此行，否则启动告警。
 
 ### 2.2 版本决策建议
 
 | 场景 | 建议 |
 |------|------|
 | **新建集群** | 直接使用 8.6.1，享受最新性能优化和安全修复 |
-| **现有 7.x 集群** | 评估后滚动升级至 8.x，Redis Cluster 支持不停机升级 |
-| **现有 6.x 集群** | 建议先升级至 7.x 过渡，再升级至 8.x |
+| **现有 7.x 集群** | 评估后滚动升级至 8.x，客户端 SDK 无需变更（RESP 协议兼容） |
+| **现有 6.x 集群** | 建议先升级至 7.x 过渡（ACL 配置可能需调整），再升级至 8.x |
 | **多集群混合** | 新集群用 8.x，老集群按计划逐步升级，客户端 SDK 需兼容两个版本 |
 
 ---
@@ -150,25 +155,25 @@ graph LR
     M3 -->|"复制"| R3
 ```
 
-> ⚠️ **关键设计**：主从节点必须分布在不同可用区/机架，确保单个可用区故障时集群仍可用。上图中 Master-01 在 AZ-A，其 Replica-01 在 AZ-C，以此类推。
+> ⚠️ **关键设计**：主从节点必须分布在不同可用区/机架，确保单个可用区故障时集群仍可用。上图中 Master-01 在 AZ-A，其 Replica-01 在 AZ-C，以此类推交叉分布。
 
 ### 3.2 节点角色与配置要求
 
 | 角色 | 数量 | 最低配置 | 推荐配置 | 说明 |
 |------|------|---------|---------|------|
 | Master | 3 | 4C 8G 100G SSD | 8C 16G 500G NVMe SSD | 承载读写，内存按数据量 × 2 预留 |
-| Replica | 3 | 4C 8G 100G SSD | 8C 16G 500G NVMe SSD | 故障接管 + 读分离 |
+| Replica | 3 | 4C 8G 100G SSD | 8C 16G 500G NVMe SSD | 故障接管 + 读分离（可选） |
 
-> ⚠️ **内存规划**：`maxmemory` 设置为物理内存的 **60%-75%**，预留空间给 RDB/AOF 重写、fork 子进程、操作系统缓存。例如 16G 物理内存建议 `maxmemory 10gb`。
+> ⚠️ **内存规划**：`maxmemory` 设置为物理内存的 **60%-75%**，预留空间给 RDB/AOF 重写 fork 子进程、操作系统缓存。例如 16G 物理内存建议 `maxmemory 10gb`。
 
 ### 3.3 网络与端口规划
 
 | 源 | 目标端口 | 协议 | 用途 |
 |----|---------|------|------|
 | 客户端 → Redis 节点 | 6379/tcp | RESP | Redis 数据读写 |
-| Redis 节点 ↔ Redis 节点 | 16379/tcp | Gossip (二进制) | 集群总线：节点发现、故障检测、slot 迁移 |
+| Redis 节点 ↔ Redis 节点 | 16379/tcp | Gossip（二进制） | 集群总线：节点发现、故障检测、slot 迁移 |
 | 运维机 → Redis 节点 | 6379/tcp | RESP | redis-cli 管理 |
-| Prometheus → Redis 节点 | 9121/tcp | HTTP | redis_exporter 指标采集（可选） |
+| Prometheus → Redis 节点 | 9121/tcp | HTTP | redis_exporter 指标采集 |
 
 > ⚠️ 集群总线端口 = 数据端口 + 10000（默认 6379 + 10000 = 16379），防火墙必须同时放行两个端口。
 
@@ -183,11 +188,9 @@ graph LR
 #### 4.1.1 系统优化
 
 ```bash
-# ── 内核参数优化 ──────────────────────────
 cat > /etc/sysctl.d/99-redis.conf << 'EOF'
-# Redis 生产环境内核参数
 vm.overcommit_memory = 1          # ★ Redis BGSAVE 必须，允许 fork 时 overcommit
-vm.swappiness = 1                 # 尽量避免使用 swap（设为 0 在某些内核版本可能导致 OOM killer 误杀）
+vm.swappiness = 1                 # 尽量避免使用 swap（设为 0 在某些内核可能触发 OOM killer）
 net.core.somaxconn = 65535        # ★ 监听队列上限，需 ≥ Redis tcp-backlog
 net.core.netdev_max_backlog = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
@@ -201,8 +204,7 @@ sysctl -p /etc/sysctl.d/99-redis.conf
 ```
 
 ```bash
-# ── 关闭 Transparent Huge Pages（THP）──────
-# ★ Redis 强烈建议关闭 THP，否则 fork 时延迟和内存占用显著增加
+# ★ 关闭 Transparent Huge Pages（THP）—— Redis 强烈建议关闭，否则 fork 延迟和内存占用显著增加
 cat > /etc/systemd/system/disable-thp.service << 'EOF'
 [Unit]
 Description=Disable Transparent Huge Pages (THP)
@@ -229,10 +231,12 @@ cat /sys/kernel/mm/transparent_hugepage/enabled
 
 sysctl vm.overcommit_memory
 # 预期输出：vm.overcommit_memory = 1
+
+sysctl net.core.somaxconn
+# 预期输出：net.core.somaxconn = 65535
 ```
 
 ```bash
-# ── 文件描述符限制 ──────────────────────────
 cat > /etc/security/limits.d/99-redis.conf << 'EOF'
 redis soft nofile 65535
 redis hard nofile 65535
@@ -247,7 +251,8 @@ EOF
 id -u redis &>/dev/null || useradd -r -s /sbin/nologin -d /opt/redis redis
 
 mkdir -p /opt/redis/{bin,conf,data,logs,run}
-chown -R redis:redis /opt/redis
+mkdir -p /backup/redis
+chown -R redis:redis /opt/redis /backup/redis
 ```
 
 #### 4.1.3 防火墙配置
@@ -256,15 +261,19 @@ chown -R redis:redis /opt/redis
 # ── Rocky Linux 9（firewalld）──────────────
 firewall-cmd --permanent --add-port=6379/tcp
 firewall-cmd --permanent --add-port=16379/tcp
+firewall-cmd --permanent --add-port=9121/tcp
 firewall-cmd --reload
 
 # ✅ 验证
 firewall-cmd --list-ports
-# 预期输出包含：6379/tcp 16379/tcp
+# 预期输出包含：6379/tcp 16379/tcp 9121/tcp
+```
 
-# ── Ubuntu 22.04（ufw）────────────────────
+```bash
+# ── Ubuntu 22.04（差异）────────────────────
 # ufw allow 6379/tcp
 # ufw allow 16379/tcp
+# ufw allow 9121/tcp
 # ufw reload
 ```
 
@@ -299,14 +308,13 @@ chown -R redis:redis /opt/redis/bin/
 ```bash
 # ✅ 验证
 /opt/redis/bin/redis-server --version
-# 预期输出：Redis server v=8.6.1 ...
+# 预期输出：Redis server v=8.6.1 sha=...
 
 /opt/redis/bin/redis-cli --version
 # 预期输出：redis-cli 8.6.1
 ```
 
 ```bash
-# 清理编译临时文件
 rm -rf /tmp/redis-8.6.1 /tmp/redis-8.6.1.tar.gz
 ```
 
@@ -322,9 +330,9 @@ cat > /opt/redis/conf/redis.conf << 'EOF'
 bind 192.168.1.101 127.0.0.1    # ★ ← 根据本节点实际 IP 修改
 port 6379
 protected-mode yes
-tcp-backlog 511                  # 需配合 net.core.somaxconn ≥ 511
+tcp-backlog 511
 timeout 300                      # 空闲客户端超时断开（秒），0 为不断开
-tcp-keepalive 60                 # TCP keepalive 探测间隔
+tcp-keepalive 60
 
 # ━━━━━━━━━━━━━━━━ 通用 ━━━━━━━━━━━━━━━━
 daemonize no                     # systemd 管理，不使用 daemon 模式
@@ -339,50 +347,48 @@ masterauth YourStr0ngP@ssw0rd!   # ★ ← 与 requirepass 保持一致，集群
 
 # ━━━━━━━━━━━━━━━━ 内存 ━━━━━━━━━━━━━━━━
 maxmemory 10gb                   # ★ ← 根据物理内存调整，建议为物理内存的 60%-75%
-                                 # ⚠️ 16G 物理内存建议 10gb，32G 建议 20gb-24gb
-maxmemory-policy allkeys-lru     # 内存满时淘汰策略
-                                 # ⚠️ 纯缓存场景用 allkeys-lru
-                                 # ⚠️ 有持久化需求用 volatile-lru（仅淘汰设置了 TTL 的 key）
+                                 # ⚠️ 16G 物理内存 → 10gb，32G → 20gb-24gb
+maxmemory-policy allkeys-lru     # ⚠️ 纯缓存用 allkeys-lru；有持久化需求用 volatile-lru
 
 # ━━━━━━━━━━━━━━━━ RDB 持久化 ━━━━━━━━━━━━━━━━
 save 3600 1                      # 3600 秒内至少 1 次写入则触发 RDB
-save 300 100                     # 300 秒内至少 100 次写入
-save 60 10000                    # 60 秒内至少 10000 次写入
+save 300 100
+save 60 10000
 rdbcompression yes
 rdbchecksum yes
 dbfilename dump.rdb
-dir /opt/redis/data              # ★ ← 数据目录，建议挂载独立 SSD 磁盘
+dir /opt/redis/data              # ★ ← 数据目录，建议挂载独立 SSD/NVMe 磁盘
 
 # ━━━━━━━━━━━━━━━━ AOF 持久化 ━━━━━━━━━━━━━━━━
 appendonly yes                   # ★ 生产环境必须开启 AOF
 appendfilename "appendonly.aof"
 appendfsync everysec             # 每秒刷盘，兼顾性能与数据安全
-                                 # ⚠️ 对数据丢失零容忍用 always（性能下降明显）
-auto-aof-rewrite-percentage 100  # AOF 文件增长 100% 时触发重写
-auto-aof-rewrite-min-size 64mb   # AOF 文件最小 64MB 才触发重写
-aof-use-rdb-preamble yes         # 混合持久化：AOF 重写时使用 RDB 格式前缀，加速加载
+                                 # ⚠️ 对数据丢失零容忍用 always（性能下降约 50%）
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+aof-use-rdb-preamble yes         # 混合持久化：AOF 重写时使用 RDB 格式前缀，加速重启加载
 
 # ━━━━━━━━━━━━━━━━ 主从复制 ━━━━━━━━━━━━━━━━
-replica-serve-stale-data yes     # 从节点在同步中断时仍响应读请求（返回旧数据）
-replica-read-only yes            # 从节点只读
-repl-diskless-sync yes           # 无盘复制：主节点直接通过 socket 发送 RDB 给从节点
-repl-diskless-sync-delay 5       # 无盘复制延迟 5 秒，等待更多从节点连接
+replica-serve-stale-data yes
+replica-read-only yes
+repl-diskless-sync yes           # 无盘复制：主节点直接通过 socket 发送 RDB
+repl-diskless-sync-delay 5
 repl-backlog-size 256mb          # ★ 复制积压缓冲区，网络抖动时避免全量同步
                                  # ⚠️ 写入量大的场景建议 512mb 或更大
-repl-backlog-ttl 3600            # 积压缓冲区保留时间
+repl-backlog-ttl 3600
 
 # ━━━━━━━━━━━━━━━━ Lazy Free ━━━━━━━━━━━━━━━━
 lazyfree-lazy-eviction yes       # 内存淘汰时异步释放
 lazyfree-lazy-expire yes         # key 过期时异步释放
-lazyfree-lazy-server-del yes     # DEL 命令改为异步 UNLINK
-replica-lazy-flush yes           # 从节点全量同步前异步清空数据
+lazyfree-lazy-server-del yes     # DEL 改为异步 UNLINK
+replica-lazy-flush yes           # 从节点全量同步前异步清空
 
 # ━━━━━━━━━━━━━━━━ 性能调优 ━━━━━━━━━━━━━━━━
-hz 10                            # 内部定时任务频率（默认 10，高并发场景可调至 100）
-dynamic-hz yes                   # 根据客户端连接数动态调整 hz
-io-threads 4                     # ★ ← 多线程 I/O，建议设为 CPU 核数的 1/2 到 2/3
-                                 # ⚠️ 4 核设 2-3，8 核设 4-6，仅加速网络 I/O，命令执行仍单线程
-io-threads-do-reads yes          # 读操作也使用多线程
+hz 10                            # 内部定时任务频率（高并发可调至 100）
+dynamic-hz yes
+io-threads 4                     # ★ ← 多线程 I/O，建议 CPU 核数的 1/2
+                                 # ⚠️ 4 核设 2-3，8 核设 4-6
+                                 # ⚠️ Redis 8.x 已移除 io-threads-do-reads（读默认多线程）
 
 # ━━━━━━━━━━━━━━━━ Cluster ━━━━━━━━━━━━━━━━
 cluster-enabled yes
@@ -394,14 +400,17 @@ cluster-announce-port 6379
 cluster-announce-bus-port 16379
 cluster-require-full-coverage yes  # 任一 slot 不可用时整个集群拒绝写入
                                    # ⚠️ 设为 no 则部分 slot 不可用时其余 slot 仍可读写
-cluster-allow-reads-when-down no   # 集群 down 时是否允许读
+cluster-allow-reads-when-down no
 
 # ━━━━━━━━━━━━━━━━ 慢查询日志 ━━━━━━━━━━━━━━━━
 slowlog-log-slower-than 10000    # 超过 10ms 的命令记入慢查询日志
-slowlog-max-len 1024             # 慢查询日志最多保留 1024 条
+slowlog-max-len 1024
+
+# ━━━━━━━━━━━━━━━━ 延迟追踪 ━━━━━━━━━━━━━━━━
+latency-tracking yes             # Redis 8.x 内置延迟追踪，替代旧版 latency monitor
 
 # ━━━━━━━━━━━━━━━━ 客户端限制 ━━━━━━━━━━━━━━━━
-maxclients 10000                 # 最大客户端连接数
+maxclients 10000
 EOF
 
 chown redis:redis /opt/redis/conf/redis.conf
@@ -458,7 +467,7 @@ systemctl status redis.service
 
 > 🖥️ **执行节点：任意一台 Master 节点（如 Master-01）**
 
-确认 6 个节点全部启动后，执行集群创建命令：
+确认 6 个节点全部启动后，执行集群创建：
 
 ```bash
 /opt/redis/bin/redis-cli -a YourStr0ngP@ssw0rd! --cluster create \
@@ -480,12 +489,15 @@ systemctl status redis.service
 Master[0] -> Slots 0 - 5460
 Master[1] -> Slots 5461 - 10922
 Master[2] -> Slots 10923 - 16383
+Adding replica 192.168.1.105:6379 to 192.168.1.101:6379
+Adding replica 192.168.1.106:6379 to 192.168.1.102:6379
+Adding replica 192.168.1.104:6379 to 192.168.1.103:6379
 ...
 [OK] All nodes agree about slots configuration.
 [OK] All 16384 slots covered.
 ```
 
-> ⚠️ **跨机架部署注意**：默认分配可能将主从放在同一机架。创建集群后，使用 `CLUSTER REPLICATE` 手动调整主从关系，确保主从分布在不同可用区。
+> ⚠️ **跨机架部署注意**：默认分配可能将主从放在同一机架。创建集群后使用 `CLUSTER REPLICATE` 手动调整主从关系，确保主从分布在不同可用区。
 
 ### 4.4 安装验证
 
@@ -518,7 +530,7 @@ Master[2] -> Slots 10923 - 16383
 ```
 
 ```bash
-# ✅ 验证集群完整性检查
+# ✅ 验证集群完整性
 /opt/redis/bin/redis-cli -a YourStr0ngP@ssw0rd! --cluster check 192.168.1.101:6379
 # 预期输出：
 # [OK] All nodes agree about slots configuration.
@@ -529,9 +541,9 @@ Master[2] -> Slots 10923 - 16383
 
 ## 5. 关键参数配置说明
 
-### 5.1 核心配置文件详解
+### 5.1 核心参数分类汇总
 
-完整配置文件已在 4.2.2 节提供（含逐行注释），此处仅对关键参数分类汇总。
+完整配置文件已在 4.2.2 节提供（含逐行注释），此处分类汇总。
 
 | 分类 | 参数 | 推荐值 | 说明 |
 |------|------|--------|------|
@@ -548,21 +560,30 @@ Master[2] -> Slots 10923 - 16383
 | **Lazy Free** | `lazyfree-lazy-*` | 全部 `yes` | 避免大 key 删除阻塞主线程 |
 | **安全** | `requirepass` | 强密码 | ★ 生产必须设置 |
 | **安全** | `protected-mode` | `yes` | 配合 bind 限制访问来源 |
+| **监控** | `latency-tracking` | `yes` | Redis 8.x 内置延迟追踪 |
+| **慢查询** | `slowlog-log-slower-than` | `10000` | 超过 10ms 记录慢查询 |
 
 ### 5.2 生产环境推荐调优参数
 
 #### 内存相关
 
 ```bash
-# 查看当前内存使用
 redis-cli -a YourStr0ngP@ssw0rd! INFO memory
 # 关注指标：
 # used_memory_human      — 已使用内存
 # maxmemory_human        — 最大内存限制
-# mem_fragmentation_ratio — 内存碎片率（正常范围 1.0-1.5，>1.5 需关注）
+# mem_fragmentation_ratio — 内存碎片率（正常 1.0-1.5，>1.5 需关注）
 ```
 
-> ⚠️ 当 `mem_fragmentation_ratio` > 1.5 时，说明内存碎片严重，可通过 `MEMORY PURGE` 手动释放，或配置 `activedefrag yes` 开启自动碎片整理。
+> ⚠️ 当 `mem_fragmentation_ratio` > 1.5 时，通过 `MEMORY PURGE` 手动释放，或配置 `activedefrag yes` 开启自动碎片整理。
+
+#### 持久化策略选择
+
+| 场景 | RDB | AOF | 说明 |
+|------|-----|-----|------|
+| 纯缓存（可丢数据） | 开启 | 关闭 | 仅用 RDB 做冷备份 |
+| 缓存 + 数据安全 | 开启 | everysec | ★ 推荐方案，最多丢失 1 秒数据 |
+| 金融/交易场景 | 开启 | always | 零数据丢失，性能下降约 50% |
 
 #### 网络相关
 
@@ -573,23 +594,15 @@ redis-cli -a YourStr0ngP@ssw0rd! INFO memory
 | `tcp-keepalive` | `60` | 检测死连接 |
 | `maxclients` | `10000` | 根据业务并发量调整 |
 
-#### 持久化相关
-
-| 场景 | RDB | AOF | 说明 |
-|------|-----|-----|------|
-| 纯缓存（可丢数据） | 开启 | 关闭 | 仅用 RDB 做冷备份 |
-| 缓存 + 数据安全 | 开启 | everysec | ★ 推荐方案，最多丢失 1 秒数据 |
-| 金融/交易场景 | 开启 | always | 零数据丢失，性能下降约 50% |
-
 ---
 
 ## 6. 快速体验部署（开发 / 测试环境）
 
-> ⚠️ **本章方案仅适用于开发/测试环境，严禁用于生产。** 使用 Docker Compose 在单机模拟 6 节点 Redis Cluster，便于快速验证和学习。
+> ⚠️ **本章方案仅适用于开发/测试环境，严禁用于生产。** Redis Cluster 强依赖多节点集群模式，使用 Docker Compose 在单机模拟 6 节点（3 主 3 从）集群。
 
 ### 6.1 快速启动方案选型
 
-Redis Cluster 强依赖多节点集群模式，选择 Docker Compose 在单机启动 6 个容器模拟 3 主 3 从集群。
+Redis Cluster 最少需要 6 个节点（3 主 3 从），选择 Docker Compose 在单机启动 6 个容器模拟集群，是最便捷的体验方式。
 
 ### 6.2 快速启动步骤与验证
 
@@ -762,14 +775,11 @@ DEOF
 ```
 
 ```bash
-# 启动集群
 cd /tmp/redis-cluster-test
 docker compose up -d
 
-# 等待所有节点就绪
 sleep 5
 
-# 创建集群
 docker exec redis-test-1 redis-cli -a TestPass123 --cluster create \
   172.28.0.11:6379 172.28.0.12:6379 172.28.0.13:6379 \
   172.28.0.14:6379 172.28.0.15:6379 172.28.0.16:6379 \
@@ -812,6 +822,9 @@ redis-cli -a YourStr0ngP@ssw0rd! CLUSTER INFO
 # 节点列表（含角色、slot 分配、连接状态）
 redis-cli -a YourStr0ngP@ssw0rd! CLUSTER NODES
 
+# 当前节点 ID
+redis-cli -a YourStr0ngP@ssw0rd! CLUSTER MYID
+
 # 集群完整性检查（slot 覆盖、节点一致性）
 redis-cli -a YourStr0ngP@ssw0rd! --cluster check 192.168.1.101:6379
 
@@ -832,16 +845,21 @@ redis-cli -a YourStr0ngP@ssw0rd! -c MEMORY USAGE <key>
 # 内存诊断
 redis-cli -a YourStr0ngP@ssw0rd! MEMORY DOCTOR
 
+# 内存碎片手动整理
+redis-cli -a YourStr0ngP@ssw0rd! MEMORY PURGE
+
 # 慢查询日志
 redis-cli -a YourStr0ngP@ssw0rd! SLOWLOG GET 10
 redis-cli -a YourStr0ngP@ssw0rd! SLOWLOG LEN
 redis-cli -a YourStr0ngP@ssw0rd! SLOWLOG RESET
 
-# 实时命令监控（调试用，生产慎用）
-redis-cli -a YourStr0ngP@ssw0rd! MONITOR
-
-# 延迟诊断
+# 延迟诊断（Redis 8.x 内置 latency-tracking）
 redis-cli -a YourStr0ngP@ssw0rd! LATENCY LATEST
+redis-cli -a YourStr0ngP@ssw0rd! LATENCY HISTORY <event>
+
+# 实时延迟测试
+redis-cli -a YourStr0ngP@ssw0rd! --latency -h 192.168.1.101 -p 6379
+redis-cli -a YourStr0ngP@ssw0rd! --latency-history -h 192.168.1.101 -p 6379
 
 # 客户端连接列表
 redis-cli -a YourStr0ngP@ssw0rd! CLIENT LIST
@@ -849,6 +867,9 @@ redis-cli -a YourStr0ngP@ssw0rd! CLIENT LIST
 # 服务器统计
 redis-cli -a YourStr0ngP@ssw0rd! INFO stats
 # 关注：instantaneous_ops_per_sec, keyspace_hits, keyspace_misses
+
+# 实时命令监控（调试用，生产慎用，会严重影响性能）
+redis-cli -a YourStr0ngP@ssw0rd! MONITOR
 ```
 
 #### 数据操作
@@ -873,6 +894,9 @@ redis-cli -a YourStr0ngP@ssw0rd! -c OBJECT ENCODING <key>
 
 # 当前节点 key 数量
 redis-cli -a YourStr0ngP@ssw0rd! DBSIZE
+
+# 大 key 扫描
+redis-cli -a YourStr0ngP@ssw0rd! --bigkeys
 ```
 
 #### 配置热更新
@@ -900,13 +924,20 @@ redis-cli -a YourStr0ngP@ssw0rd! ACL LIST
 redis-cli -a YourStr0ngP@ssw0rd! ACL WHOAMI
 
 # 创建只读用户（仅允许 GET/MGET/SCAN 等读命令）
-redis-cli -a YourStr0ngP@ssw0rd! ACL SETUSER readonly on '>ReadOnlyP@ss' ~* +@read
+redis-cli -a YourStr0ngP@ssw0rd! ACL SETUSER readonly on '>ReadOnlyP@ss' '~*' '+@read'
 
 # 创建应用用户（允许读写，禁止管理命令）
-redis-cli -a YourStr0ngP@ssw0rd! ACL SETUSER appuser on '>AppP@ss2026' ~app:* +@read +@write +@string +@hash +@list +@set +@sortedset -@admin -@dangerous
+redis-cli -a YourStr0ngP@ssw0rd! ACL SETUSER appuser on '>AppP@ss2026' '~app:*' '+@read' '+@write' '+@string' '+@hash' '+@list' '+@set' '+@sortedset' '-@admin' '-@dangerous'
+
+# 删除用户
+redis-cli -a YourStr0ngP@ssw0rd! ACL DELUSER <username>
 
 # 持久化 ACL 配置
 redis-cli -a YourStr0ngP@ssw0rd! ACL SAVE
+
+# 查看 ACL 被拒绝日志
+redis-cli -a YourStr0ngP@ssw0rd! ACL LOG 10
+redis-cli -a YourStr0ngP@ssw0rd! ACL LOG RESET
 ```
 
 ### 7.2 备份与恢复
@@ -922,10 +953,10 @@ redis-cli -a YourStr0ngP@ssw0rd! LASTSAVE
 
 # 查看持久化状态
 redis-cli -a YourStr0ngP@ssw0rd! INFO persistence
-# 关注：rdb_last_bgsave_status:ok, rdb_last_save_time
+# 关注：rdb_last_bgsave_status:ok, aof_enabled:1
 
 # 备份 RDB 文件（在所有节点执行）
-cp /opt/redis/data/dump.rdb /backup/redis/dump-$(date +%Y%m%d%H%M%S).rdb
+cp /opt/redis/data/dump.rdb /backup/redis/dump-$(hostname)-$(date +%Y%m%d%H%M%S).rdb
 ```
 
 #### AOF 备份
@@ -934,17 +965,18 @@ cp /opt/redis/data/dump.rdb /backup/redis/dump-$(date +%Y%m%d%H%M%S).rdb
 # 手动触发 AOF 重写
 redis-cli -a YourStr0ngP@ssw0rd! BGREWRITEAOF
 
-# 备份 AOF 文件
-cp -r /opt/redis/data/appendonlydir/ /backup/redis/aof-$(date +%Y%m%d%H%M%S)/
+# 备份 AOF 目录
+cp -r /opt/redis/data/appendonlydir/ /backup/redis/aof-$(hostname)-$(date +%Y%m%d%H%M%S)/
 ```
 
 #### 恢复流程
 
 ```
-1. 停止 Redis 服务
+1. 停止 Redis 服务：systemctl stop redis
 2. 将备份的 RDB/AOF 文件复制到 /opt/redis/data/
-3. 确保文件权限为 redis:redis
-4. 启动 Redis 服务（优先加载 AOF，若 AOF 不存在则加载 RDB）
+3. 确保文件权限：chown -R redis:redis /opt/redis/data/
+4. 启动 Redis：systemctl start redis（优先加载 AOF，AOF 不存在则加载 RDB）
+5. 验证数据：redis-cli -a YourStr0ngP@ssw0rd! DBSIZE
 ```
 
 ### 7.3 集群扩缩容
@@ -979,6 +1011,9 @@ redis-cli -a YourStr0ngP@ssw0rd! --cluster reshard 192.168.1.101:6379 \
   --cluster-slots <slot-count> \
   --cluster-yes
 
+# 确认 slot 已全部迁移
+redis-cli -a YourStr0ngP@ssw0rd! --cluster check 192.168.1.101:6379
+
 # 移除节点
 redis-cli -a YourStr0ngP@ssw0rd! --cluster del-node \
   192.168.1.101:6379 <removing-node-id>
@@ -987,7 +1022,6 @@ redis-cli -a YourStr0ngP@ssw0rd! --cluster del-node \
 #### Slot 均衡
 
 ```bash
-# 自动均衡 slot 分布
 redis-cli -a YourStr0ngP@ssw0rd! --cluster rebalance 192.168.1.101:6379 \
   --cluster-threshold 2
 ```
@@ -997,36 +1031,43 @@ redis-cli -a YourStr0ngP@ssw0rd! --cluster rebalance 192.168.1.101:6379 \
 #### 滚动升级步骤（不停机）
 
 ```
-1. 先升级所有 Replica 节点（逐个操作）：
-   a. 停止 Replica 的 Redis 服务
-   b. 替换 redis-server 二进制文件
-   c. 启动服务，确认自动重新加入集群
+1. 升级前准备：
+   a. 所有节点执行 BGSAVE 并备份 RDB 文件
+   b. 记录当前 CLUSTER NODES 信息
 
-2. 逐个升级 Master 节点：
+2. 先升级所有 Replica 节点（逐个操作）：
+   a. systemctl stop redis
+   b. 替换 /opt/redis/bin/ 下的二进制文件（新版本编译产物）
+   c. systemctl start redis
+   d. 确认节点自动重新加入集群（CLUSTER NODES 状态为 connected）
+
+3. 逐个升级 Master 节点：
    a. 在目标 Master 的 Replica 上执行 CLUSTER FAILOVER（Replica 提升为 Master）
-   b. 停止原 Master（现在已降为 Replica）的 Redis 服务
-   c. 替换二进制文件，启动服务
-   d. 确认节点重新加入集群
+   b. 等待 failover 完成（CLUSTER NODES 确认角色互换）
+   c. 停止原 Master（现已降为 Replica）：systemctl stop redis
+   d. 替换二进制文件，启动服务
+   e. 确认节点重新加入集群
 ```
 
 ```bash
 # 在 Replica 上执行手动 failover
 redis-cli -a YourStr0ngP@ssw0rd! -h <replica-ip> -p 6379 CLUSTER FAILOVER
 
-# 确认 failover 完成
+# ✅ 验证 failover 完成
 redis-cli -a YourStr0ngP@ssw0rd! CLUSTER NODES
+# 预期：原 Replica 变为 master，原 Master 变为 slave
 ```
 
 #### 回滚方案
 
 ```
-1. 停止已升级节点的 Redis 服务
+1. 停止已升级节点：systemctl stop redis
 2. 将二进制文件替换回旧版本
 3. 启动服务（Redis 向下兼容 RDB/AOF 格式）
 4. 若 RDB/AOF 格式不兼容（跨大版本），需从备份恢复
 ```
 
-> ⚠️ 升级前务必对所有节点执行 `BGSAVE` 并备份 RDB 文件。
+> ⚠️ 升级前务必对所有节点执行 `BGSAVE` 并备份 RDB 文件至 `/backup/redis/`。
 
 ---
 
@@ -1048,36 +1089,36 @@ redis-cli -h 192.168.1.101 -p 6379 --user appuser --pass AppP@ss2026 -c
 ### 8.2 数据类型操作
 
 ```bash
-# String
+# ━━━ String ━━━
 SET user:1001:name "张三" EX 3600    # 设置值，3600 秒过期
-GET user:1001:name
-MSET k1 v1 k2 v2 k3 v3             # 批量设置（需在同一 slot，可用 hash tag）
-INCR counter:page_view              # 原子自增
+GET user:1001:name                   # 获取值
+INCR counter:page_view               # 原子自增
+MSET "{user:1001}:name" "张三" "{user:1001}:age" "30"   # 批量设置（Hash Tag 确保同 slot）
+MGET "{user:1001}:name" "{user:1001}:age"
 
-# Hash
-HSET user:1001 name "张三" age 30 city "北京"
-HGET user:1001 name
-HGETALL user:1001
+# ━━━ Hash ━━━
+HSET user:2001 name "李四" age 25 city "上海"
+HGET user:2001 name                  # 获取单个字段
+HGETALL user:2001                    # 获取全部字段
 
-# List
-LPUSH queue:tasks "task1" "task2"
-RPOP queue:tasks
-LRANGE queue:tasks 0 -1
+# ━━━ List ━━━
+LPUSH queue:tasks "task1" "task2" "task3"
+RPOP queue:tasks                     # 右侧弹出
+LRANGE queue:tasks 0 -1              # 查看全部元素
 
-# Set
+# ━━━ Set ━━━
 SADD tags:article:1 "redis" "database" "nosql"
-SMEMBERS tags:article:1
-SINTER tags:article:1 tags:article:2   # 交集
+SMEMBERS tags:article:1              # 查看全部成员
 
-# Sorted Set
+# ━━━ Sorted Set ━━━
 ZADD leaderboard 100 "player1" 200 "player2" 150 "player3"
-ZREVRANGE leaderboard 0 9 WITHSCORES   # Top 10
-ZRANK leaderboard "player1"
+ZREVRANGE leaderboard 0 9 WITHSCORES  # Top 10（降序）
+ZRANK leaderboard "player1"           # 排名（升序）
 
-# Stream
+# ━━━ Stream ━━━
 XADD mystream '*' field1 value1 field2 value2
-XLEN mystream
-XRANGE mystream - + COUNT 10
+XLEN mystream                        # 消息数量
+XRANGE mystream - + COUNT 10         # 读取最近 10 条
 ```
 
 > ⚠️ **Cluster 模式下的多 key 操作**：`MSET`、`MGET`、`SUNION` 等多 key 命令要求所有 key 在同一 slot。使用 **Hash Tag** `{tag}` 强制路由：`SET {user:1001}:name "张三"` 和 `SET {user:1001}:age 30` 会被路由到同一 slot。
@@ -1085,39 +1126,32 @@ XRANGE mystream - + COUNT 10
 ### 8.3 用户与权限管理
 
 ```bash
-# 查看所有 ACL 用户
-ACL LIST
+ACL LIST                             # 查看所有 ACL 用户
+ACL WHOAMI                           # 查看当前用户
 
-# 创建用户
-ACL SETUSER monitor on '>MonitorP@ss' ~* +info +cluster|info +cluster|nodes +slowlog|get +client|list -@all
+# 创建监控专用用户
+ACL SETUSER monitor on '>MonitorP@ss' '~*' '+info' '+cluster|info' '+cluster|nodes' '+slowlog|get' '+client|list' '-@all'
 
-# 删除用户
-ACL DELUSER <username>
-
-# 持久化 ACL
-ACL SAVE
-
-# 查看 ACL 日志（记录被拒绝的命令）
-ACL LOG 10
-ACL LOG RESET
+ACL DELUSER <username>               # 删除用户
+ACL SAVE                             # 持久化 ACL 配置
+ACL LOG 10                           # 查看被拒绝的命令日志
+ACL LOG RESET                        # 清空 ACL 日志
 ```
 
 ### 8.4 性能查询与慢查询分析
 
 ```bash
-# 慢查询日志
-SLOWLOG GET 20                    # 获取最近 20 条慢查询
-SLOWLOG LEN                       # 慢查询日志条数
-SLOWLOG RESET                     # 清空慢查询日志
+SLOWLOG GET 20                       # 获取最近 20 条慢查询
+SLOWLOG LEN                          # 慢查询日志条数
+SLOWLOG RESET                        # 清空慢查询日志
 
-# 实时延迟监控
+# 实时延迟测试
 redis-cli --latency -h 192.168.1.101 -p 6379 -a YourStr0ngP@ssw0rd!
-# 输出：min: 0, max: 1, avg: 0.50 (100 samples)
+# 预期输出：min: 0, max: 1, avg: 0.50 (100 samples)
 
-# 延迟历史
 redis-cli --latency-history -h 192.168.1.101 -p 6379 -a YourStr0ngP@ssw0rd!
 
-# 内置延迟诊断
+# Redis 8.x 内置延迟追踪
 LATENCY LATEST
 LATENCY HISTORY <event>
 
@@ -1128,48 +1162,224 @@ redis-cli -h 192.168.1.101 -p 6379 -a YourStr0ngP@ssw0rd! --bigkeys
 ### 8.5 主从/集群状态监控命令
 
 ```bash
-# 复制状态
-INFO replication
-# 关注：role, connected_slaves, slave0:state=online
-
-# 集群状态
-CLUSTER INFO
-# 关注：cluster_state:ok, cluster_slots_ok:16384
-
-# 节点详情
-CLUSTER NODES
-
-# 当前节点 ID
-CLUSTER MYID
-
-# Slot 分布
-CLUSTER SLOTS
+INFO replication                     # role, connected_slaves, slave0:state=online
+CLUSTER INFO                         # cluster_state:ok, cluster_slots_ok:16384
+CLUSTER NODES                        # 节点详情
+CLUSTER MYID                         # 当前节点 ID
+CLUSTER SLOTS                        # Slot 分布
 ```
 
 ### 8.6 生产常见故障处理命令
 
 ```bash
-# 节点标记为 FAILING（手动触发故障转移）
-CLUSTER FAILOVER                  # 在 Replica 上执行，安全提升为 Master
-CLUSTER FAILOVER FORCE            # 强制 failover（Master 不可达时使用）
-CLUSTER FAILOVER TAKEOVER         # 最后手段，不经过集群共识直接接管
+# 手动 Failover（在 Replica 上执行）
+CLUSTER FAILOVER                     # 安全 failover（等待主从同步完成）
+CLUSTER FAILOVER FORCE               # 强制 failover（Master 不可达时使用）
+CLUSTER FAILOVER TAKEOVER            # 最后手段，不经过集群共识直接接管
 
 # 修复集群（slot 迁移中断后的清理）
 redis-cli -a YourStr0ngP@ssw0rd! --cluster fix 192.168.1.101:6379
 
 # 重置节点（将节点从集群中移除，慎用）
-CLUSTER RESET SOFT                # 软重置：清除 slot 和已知节点，保留数据
-CLUSTER RESET HARD                # 硬重置：清除所有集群信息和数据
+CLUSTER RESET SOFT                   # 清除 slot 和已知节点，保留数据
+CLUSTER RESET HARD                   # 清除所有集群信息和数据
 
-# 忘记节点（从集群中移除已下线节点的记录）
-CLUSTER FORGET <node-id>          # 需在所有存活节点上执行
+# 忘记节点（从集群中移除已下线节点的记录，需在所有存活节点执行）
+CLUSTER FORGET <node-id>
 ```
 
 ---
 
-## 9. 注意事项与生产检查清单
+## 9. 监控与告警接入
 
-### 9.1 安装前环境核查
+### 9.1 Prometheus 指标暴露（redis_exporter）
+
+> 🖥️ **执行节点：每个 Redis 节点或独立监控节点**
+
+```bash
+# 下载并安装 redis_exporter（v1.82.0 已验证兼容 Redis 8.6.1）
+cd /tmp
+[ -f redis_exporter-v1.82.0.linux-amd64.tar.gz ] || \
+  wget -O redis_exporter-v1.82.0.linux-amd64.tar.gz \
+  "https://github.com/oliver006/redis_exporter/releases/download/v1.82.0/redis_exporter-v1.82.0.linux-amd64.tar.gz"
+
+tar xzf redis_exporter-v1.82.0.linux-amd64.tar.gz
+cp redis_exporter-v1.82.0.linux-amd64/redis_exporter /usr/local/bin/
+chmod +x /usr/local/bin/redis_exporter
+rm -rf /tmp/redis_exporter-v1.82.0*
+```
+
+```bash
+cat > /etc/systemd/system/redis-exporter.service << 'EOF'
+[Unit]
+Description=Redis Exporter for Prometheus
+After=redis.service
+
+[Service]
+Type=simple
+User=redis
+ExecStart=/usr/local/bin/redis_exporter \
+  --redis.addr=redis://127.0.0.1:6379 \
+  --redis.password=YourStr0ngP@ssw0rd! \
+  --web.listen-address=:9121
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now redis-exporter.service
+```
+
+```bash
+# ✅ 验证
+curl -s http://localhost:9121/metrics | grep "redis_up"
+# 预期输出：redis_up 1
+```
+
+### 9.2 关键监控指标
+
+| 指标名 | 含义 | 告警阈值 |
+|--------|------|---------|
+| `redis_up` | 实例是否可达 | = 0 告警（Critical） |
+| `redis_connected_clients` | 当前客户端连接数 | > maxclients × 80% 告警 |
+| `redis_blocked_clients` | 阻塞中的客户端 | > 10 告警 |
+| `redis_used_memory_bytes` | 已使用内存 | > maxmemory × 90% 告警 |
+| `redis_mem_fragmentation_ratio` | 内存碎片率 | > 1.5 Warning，> 2.0 Critical |
+| `redis_instantaneous_ops_per_sec` | 当前 QPS | 监控趋势，突增/突降告警 |
+| `redis_keyspace_hits_total` / `redis_keyspace_misses_total` | 缓存命中率 | 命中率 < 90% Warning |
+| `redis_connected_slaves` | 已连接的从节点数 | < 预期数量告警 |
+| `redis_master_link_up{} = 0` | 主从复制断开 | = 0 Critical |
+| `redis_cluster_state` | 集群状态 | ≠ ok 告警（Critical） |
+| `redis_cluster_slots_ok` | 正常 slot 数 | < 16384 Critical |
+| `redis_aof_last_bgrewrite_status` | AOF 重写状态 | ≠ ok 告警 |
+| `redis_rdb_last_bgsave_status` | RDB 快照状态 | ≠ ok 告警 |
+| `redis_slowlog_length` | 慢查询日志条数 | 持续增长告警 |
+
+### 9.3 Grafana Dashboard 推荐
+
+| Dashboard | ID | 说明 |
+|-----------|----|------|
+| **Redis Dashboard for Prometheus** | `763` | 经典 Redis 监控面板，兼容 redis_exporter |
+| **Redis Cluster Overview** | `11835` | 集群级别视图，slot 分布和节点状态 |
+
+导入方式：Grafana → Dashboards → Import → 输入 Dashboard ID → 选择 Prometheus 数据源
+
+### 9.4 告警规则示例（Prometheus alerting rules）
+
+```bash
+cat > /etc/prometheus/rules/redis-alerts.yml << 'EOF'
+groups:
+  - name: redis-cluster-alerts
+    rules:
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis 实例不可达 {{ $labels.instance }}"
+          description: "Redis 实例 {{ $labels.instance }} 已宕机超过 1 分钟"
+
+      - alert: RedisClusterStateNotOk
+        expr: redis_cluster_state != 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis Cluster 状态异常 {{ $labels.instance }}"
+          description: "集群 cluster_state 不为 ok，可能存在 slot 未覆盖"
+
+      - alert: RedisClusterSlotsNotFullyCovered
+        expr: redis_cluster_slots_ok < 16384
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis Cluster Slot 未完全覆盖 {{ $labels.instance }}"
+          description: "当前 slots_ok={{ $value }}，预期 16384"
+
+      - alert: RedisMemoryHigh
+        expr: redis_used_memory_bytes / redis_maxmemory > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 内存使用超过 90% {{ $labels.instance }}"
+          description: "内存使用率 {{ $value | humanizePercentage }}，请关注淘汰策略或扩容"
+
+      - alert: RedisMemoryFragmentationHigh
+        expr: redis_mem_fragmentation_ratio > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 内存碎片率过高 {{ $labels.instance }}"
+          description: "碎片率 {{ $value }}，建议执行 MEMORY PURGE 或开启 activedefrag"
+
+      - alert: RedisReplicationBroken
+        expr: redis_connected_slaves < 1 and redis_instance_info{role="master"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis Master 无从节点 {{ $labels.instance }}"
+          description: "Master 节点已无连接的 Replica，存在数据丢失风险"
+
+      - alert: RedisSlowlogGrowing
+        expr: delta(redis_slowlog_length[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 慢查询日志快速增长 {{ $labels.instance }}"
+          description: "5 分钟内新增 {{ $value }} 条慢查询，请排查慢命令"
+
+      - alert: RedisRDBSaveFailed
+        expr: redis_rdb_last_bgsave_status != 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis RDB 快照失败 {{ $labels.instance }}"
+          description: "最近一次 BGSAVE 状态不为 ok，请检查磁盘空间和权限"
+
+      - alert: RedisConnectedClientsHigh
+        expr: redis_connected_clients > 8000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis 客户端连接数过高 {{ $labels.instance }}"
+          description: "当前连接数 {{ $value }}，接近 maxclients 限制"
+EOF
+```
+
+Prometheus 配置中添加 redis_exporter 抓取目标：
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'redis-cluster'
+    static_configs:
+      - targets:
+          - '192.168.1.101:9121'
+          - '192.168.1.102:9121'
+          - '192.168.1.103:9121'
+          - '192.168.1.104:9121'
+          - '192.168.1.105:9121'
+          - '192.168.1.106:9121'
+        labels:
+          cluster: 'redis-prod-cluster'
+```
+
+---
+
+## 10. 注意事项与生产检查清单
+
+### 10.1 安装前环境核查
 
 | 检查项 | 命令 | 预期结果 |
 |--------|------|---------|
@@ -1177,11 +1387,12 @@ CLUSTER FORGET <node-id>          # 需在所有存活节点上执行
 | overcommit_memory | `sysctl vm.overcommit_memory` | `= 1` |
 | somaxconn | `sysctl net.core.somaxconn` | `≥ 65535` |
 | 文件描述符 | `ulimit -n` | `≥ 65535` |
-| 防火墙端口 | `firewall-cmd --list-ports` | 包含 `6379/tcp 16379/tcp` |
+| 防火墙端口 | `firewall-cmd --list-ports` | 包含 `6379/tcp 16379/tcp 9121/tcp` |
 | 数据目录权限 | `ls -la /opt/redis/data/` | 属主为 `redis:redis` |
 | 时钟同步 | `timedatectl status` | NTP 已同步 |
+| 磁盘空间 | `df -h /opt/redis/data/` | 可用空间 ≥ 数据量 × 3 |
 
-### 9.2 常见故障排查
+### 10.2 常见故障排查
 
 #### 集群状态异常（cluster_state:fail）
 
@@ -1220,21 +1431,32 @@ CLUSTER FORGET <node-id>          # 需在所有存活节点上执行
   - 修复网络问题后 Replica 会自动重连
   - 若频繁全量同步，增大 `repl-backlog-size`
 
-### 9.3 安全加固建议
+#### Slot 迁移卡住
+
+- **现象**：`CLUSTER NODES` 显示某 slot 处于 `migrating` 或 `importing` 状态
+- **原因**：reshard 过程中节点宕机或网络中断
+- **排查步骤**：
+  1. `--cluster check` 查看哪些 slot 状态异常
+  2. 确认源节点和目标节点是否都在线
+- **解决方案**：
+  - `redis-cli --cluster fix <any-node-ip>:6379` 自动修复
+
+### 10.3 安全加固建议
 
 | 措施 | 说明 |
 |------|------|
 | **设置强密码** | `requirepass` + `masterauth`，长度 ≥ 16 位，含大小写+数字+特殊字符 |
 | **ACL 最小权限** | 为每个应用创建独立用户，仅授予所需命令和 key 模式权限 |
 | **bind 限制** | 仅绑定内网 IP，禁止绑定 `0.0.0.0` |
-| **禁用危险命令** | `rename-command FLUSHALL ""` / `rename-command FLUSHDB ""` / `rename-command KEYS ""` |
+| **禁用危险命令** | `rename-command FLUSHALL ""`、`rename-command FLUSHDB ""`、`rename-command KEYS ""` |
 | **网络隔离** | Redis 部署在内网，通过防火墙/安全组限制访问来源 |
-| **TLS 加密** | 跨机房/公网传输时启用 TLS（编译时需 `BUILD_TLS=yes`） |
+| **TLS 加密** | 跨机房/公网传输时启用 TLS（编译时需 `BUILD_TLS=yes`，已在 4.2.1 中包含） |
 | **定期审计** | 定期检查 `ACL LOG`、`SLOWLOG`、客户端连接列表 |
+| **定期备份** | Crontab 定时执行 BGSAVE + RDB 文件外部备份 |
 
 ---
 
-## 10. 参考资料
+## 11. 参考资料
 
 | 资源 | 链接 |
 |------|------|
@@ -1244,3 +1466,5 @@ CLUSTER FORGET <node-id>          # 需在所有存活节点上执行
 | Redis 8.6.1 Release Notes | [https://github.com/redis/redis/releases/tag/8.6.1](https://github.com/redis/redis/releases/tag/8.6.1) |
 | Redis 源码下载 | [https://download.redis.io/releases/redis-8.6.1.tar.gz](https://download.redis.io/releases/redis-8.6.1.tar.gz) |
 | Docker Hub Redis | [https://hub.docker.com/_/redis](https://hub.docker.com/_/redis) |
+| redis_exporter (Prometheus) | [https://github.com/oliver006/redis_exporter](https://github.com/oliver006/redis_exporter) |
+| Grafana Redis Dashboard | [https://grafana.com/grafana/dashboards/763](https://grafana.com/grafana/dashboards/763) |
