@@ -2,15 +2,25 @@
 title: etcd 集群生产级部署与运维指南
 author: devinyan
 updated: 2026-03-14
-version: v1.0
+version: v1.1
 middleware_version: 3.6.8
 cluster_mode: Raft
 verified: true
+changelog:
+  - version: v1.0
+    date: 2026-03-14
+    changes: "初始版本，基于 etcd 3.6.8 验证"
+  - version: v1.1
+    date: 2026-03-14
+    changes: "补充 3.3 容量规划；扩展 10.2 故障恢复（单节点/多数节点宕机、数据恢复、Leader 切换、成员误删等）；增加适用范围声明；幂等性修正"
 ---
 
 > [TOC]
 
 # etcd 集群生产级部署与运维指南
+
+> 📋 **适用范围**：本文档适用于 Rocky Linux 9.x / Ubuntu 22.04 LTS、etcd 3.6.8、Raft 集群模式。
+> 最后验证日期：2026-03-14。
 
 ## 1. 简介
 
@@ -138,7 +148,19 @@ graph LR
 
 > ⚠️ **存储**：etcd 对磁盘延迟敏感，必须使用 SSD，禁止使用 HDD 或 NFS。
 
-### 3.3 网络与端口规划
+### 3.3 容量规划
+
+etcd 存储元数据与键值对，单集群建议控制在 8GB 以内，key 数量 < 100M。按规模参考：
+
+| 规模 | 数据量 | 节点规格 | 备份保留 | 说明 |
+|------|--------|---------|---------|------|
+| 小规模 | < 1GB | 2C 4G 50G SSD × 3 | 7 天 | K8s 小集群、配置中心 |
+| 中规模 | 1~4GB | 4C 8G 100G NVMe × 3 | 14 天 | K8s 生产集群、多业务配置 |
+| 大规模 | 4~8GB | 4C 8G 200G NVMe × 5 | 30 天 | 高 QPS、建议 5 节点 |
+
+**估算公式**：`磁盘需求 = 数据量 × 2（WAL+快照） × 1.3（预留）`。超过 8GB 建议拆分为多集群或迁移到专用存储。
+
+### 3.4 网络与端口规划
 
 | 源地址 | 目标端口 | 协议 | 用途 |
 |--------|---------|------|------|
@@ -146,7 +168,7 @@ graph LR
 | etcd 节点互访 | 2380 | TCP | Raft 共识通信 |
 | Prometheus | 2379 | TCP | /metrics 指标采集 |
 
-### 3.4 安装目录规划
+### 3.5 安装目录规划
 
 | 路径 | 用途 | 规划说明 |
 |------|------|----------|
@@ -185,7 +207,7 @@ graph LR
 | `net.core.somaxconn` | 4096 | 提高 TCP 连接队列 | `sysctl net.core.somaxconn` |
 
 ```bash
-cat >> /etc/sysctl.d/99-etcd.conf << 'EOF'
+cat > /etc/sysctl.d/99-etcd.conf << 'EOF'
 fs.file-max = 655360
 vm.swappiness = 0
 net.core.somaxconn = 4096
@@ -212,7 +234,7 @@ chmod 750 /opt/etcd/ssl
 #### 4.1.3 设置 ulimit
 
 ```bash
-cat >> /etc/security/limits.d/99-etcd.conf << 'EOF'
+cat > /etc/security/limits.d/99-etcd.conf << 'EOF'
 etcd soft nofile 65536
 etcd hard nofile 65536
 etcd soft nproc 65536
@@ -401,12 +423,15 @@ ETCD_QUOTA_BACKEND_BYTES="2147483648"      # 2GB 存储配额
 | `ETCD_LOG_OUTPUTS` | default | stderr | 或 /data/etcd/log/etcd.log |
 
 ```bash
-# 追加到 /opt/etcd/conf/etcd.env
+# 追加到已有 etcd.env（4.2.2 已创建基础配置，此处补充调优参数）
+cat >> /opt/etcd/conf/etcd.env << 'EOF'
+
 ETCD_AUTO_COMPACTION_RETENTION="1"
 ETCD_AUTO_COMPACTION_MODE="periodic"
 ETCD_MAX_REQUEST_BYTES="1572864"
 ETCD_LOG_LEVEL="info"
 ETCD_LOG_OUTPUTS="stderr"
+EOF
 ```
 
 ### 5.3 生产环境认证配置（用户与密码）
@@ -544,7 +569,7 @@ docker compose down -v
 
 ## 7. 日常运维操作
 
-### 7.1 常用管理命令
+### 7.1 常用管理命令与使用演示
 
 | 命令 | 说明 |
 |------|------|
@@ -553,6 +578,61 @@ docker compose down -v
 | `etcdctl endpoint status` | 节点状态（含 Leader） |
 | `etcdctl put key val` | 写入 |
 | `etcdctl get key` | 读取 |
+
+```bash
+# 健康检查（预期：3 个 endpoint 均 healthy）
+ETCDCTL_API=3 etcdctl endpoint health --endpoints=http://192.168.1.101:2379,http://192.168.1.102:2379,http://192.168.1.103:2379
+
+# 成员列表
+etcdctl member list --endpoints=http://127.0.0.1:2379
+
+# 节点状态（含 Leader 标记，true 表示该节点为 Leader）
+etcdctl endpoint status --endpoints=http://192.168.1.101:2379,http://192.168.1.102:2379,http://192.168.1.103:2379
+
+# 写入与读取
+etcdctl put /app/config '{"key":"value"}' --endpoints=http://127.0.0.1:2379
+etcdctl get /app/config --endpoints=http://127.0.0.1:2379
+```
+
+**客户端连接代码片段**（Python + Go）：
+
+```python
+# Python（etcd3）
+import etcd3
+
+client = etcd3.client(host='192.168.1.101', port=2379)
+client.put('/app/config', '{"key":"value"}')
+value, _ = client.get('/app/config')
+print(value)
+```
+
+```go
+// Go（go.etcd.io/etcd/client/v3）
+package main
+
+import (
+    "context"
+    "log"
+    "time"
+    "go.etcd.io/etcd/client/v3"
+)
+
+func main() {
+    cli, err := clientv3.New(clientv3.Config{
+        Endpoints:   []string{"http://192.168.1.101:2379", "http://192.168.1.102:2379"},
+        DialTimeout: 5 * time.Second,
+    })
+    if err != nil { log.Fatal(err) }
+    defer cli.Close()
+
+    _, err = cli.Put(context.Background(), "/app/config", `{"key":"value"}`)
+    if err != nil { log.Fatal(err) }
+
+    resp, err := cli.Get(context.Background(), "/app/config")
+    if err != nil { log.Fatal(err) }
+    for _, v := range resp.Kvs { log.Printf("%s", v.Value) }
+}
+```
 
 ### 7.2 备份与恢复
 
@@ -642,25 +722,191 @@ Dashboard ID：**3070**（etcd 官方）
 
 ### 10.2 常见故障排查与处理指南
 
-#### 故障：节点无法加入集群
-**现象**：`member list` 仅 1~2 个节点。**原因**：`initial-cluster` 错误、网络不通。**解决**：确保 3 节点 `ETCD_INITIAL_CLUSTER`、`ETCD_INITIAL_CLUSTER_TOKEN` 完全一致；放行 2380。
+#### 故障一：节点无法加入集群
 
-#### 故障：集群无 Leader
-**状态流转图**：
+**现象**：`etcdctl member list` 仅显示 1~2 个节点，新节点日志报 `connection refused` 或 `cluster id mismatch`。
+
+**原因**：
+- `ETCD_INITIAL_CLUSTER` 三节点配置不一致（名称、IP、端口）
+- `ETCD_INITIAL_CLUSTER_TOKEN` 不同
+- 2380 端口未放行或网络不通
+
+**排查步骤**：
+```bash
+# 1. 检查各节点环境变量是否一致
+cat /opt/etcd/conf/etcd.env | grep ETCD_INITIAL_CLUSTER
+
+# 2. 测试 2380 互通
+nc -zv 192.168.1.102 2380   # 从 101 测试到 102
+
+# 3. 查看已有成员
+etcdctl member list --endpoints=http://127.0.0.1:2379
+```
+
+**解决方案**：确保 3 节点 `ETCD_INITIAL_CLUSTER`、`ETCD_INITIAL_CLUSTER_TOKEN` 完全一致；防火墙放行 2380；修复网络后重启 etcd。
+
+---
+
+#### 故障二：集群无 Leader（etcd_server_has_leader=0）
+
+**现象**：`etcdctl endpoint status` 无 Leader 标记，客户端读写超时，Prometheus 告警 `etcd_server_has_leader == 0`。
+
+**Raft 状态流转图**：
 
 ```mermaid
 stateDiagram-v2
     [*] --> Follower
-    Follower --> Candidate: 选举超时
-    Candidate --> Leader: 获得多数票
-    Candidate --> Follower: 发现更高 term
-    Leader --> Follower: 发现更高 term
+    Follower --> Candidate: 选举超时（未收到 Leader 心跳）
+    Candidate --> Leader: 获得多数票（N/2+1）
+    Candidate --> Follower: 发现更高 term 或超时
+    Leader --> Follower: 发现更高 term（网络分区后少数派）
+    Follower --> [*]: 节点宕机
+    Leader --> [*]: 节点宕机
 ```
 
-**原因**：节点数不足半数、网络分区、磁盘满。**解决**：恢复节点或网络；2 节点永久丢失需从快照恢复。
+**原因**：
+- **节点数不足半数**：3 节点集群中 2 节点宕机，无法形成多数派
+- **网络分区**：少数派（1 节点）无法选举，多数派（2 节点）可继续服务
+- **磁盘满**：etcd 无法写入 WAL，节点自退出
+- **时钟严重漂移**：Raft 依赖时间，漂移过大导致选举异常
 
-#### 故障：磁盘空间不足
-**现象**：日志报 "no space left"。**解决**：扩容或清理；调小 `ETCD_AUTO_COMPACTION_RETENTION`。
+**排查步骤**：
+```bash
+# 1. 检查存活节点数
+etcdctl endpoint status --endpoints=http://node1:2379,http://node2:2379,http://node3:2379
+
+# 2. 检查各节点磁盘
+df -h /data/etcd/data
+
+# 3. 检查各节点 etcd 进程与日志
+systemctl status etcd
+journalctl -u etcd -n 50 --no-pager
+```
+
+**解决方案**：
+
+| 场景 | 恢复思路 |
+|------|---------|
+| 1 节点宕机 | 恢复该节点即可，2/3 多数派仍可读写，无需人工干预 |
+| 2 节点宕机 | **无法自动恢复**，需尽快恢复至少 1 个节点使多数派（2/3）恢复；若 2 节点永久丢失，需从快照重建集群（见故障五） |
+| 网络分区 | 多数派侧可继续服务；少数派侧无法选举，网络恢复后自动同步 |
+| 磁盘满 | 扩容或清理磁盘，重启 etcd；调小 `ETCD_AUTO_COMPACTION_RETENTION` 减少空间占用 |
+
+---
+
+#### 故障三：单节点宕机恢复
+
+**现象**：某节点 `systemctl status etcd` 显示 failed 或机器宕机。
+
+**恢复思路**：
+
+1. **若为进程异常退出**：`systemctl restart etcd`，数据目录完整时自动从其他节点同步
+2. **若为机器宕机**：修复机器后启动 etcd，加入现有集群（`--initial-cluster-state=existing`）
+3. **若数据目录损坏**：从备份快照恢复该节点（见故障五），或删除该成员后重新添加
+
+**验证**：
+```bash
+etcdctl endpoint health --endpoints=http://node1:2379,http://node2:2379,http://node3:2379
+# 预期：3 个 endpoint 均 healthy
+```
+
+---
+
+#### 故障四：多数节点宕机（2/3 节点永久丢失）
+
+**现象**：3 节点集群中 2 节点磁盘损坏或机器不可恢复，仅 1 节点存活，集群无法形成多数派。
+
+**恢复思路**：**必须从快照重建集群**，存活节点的数据可能不是最新，需使用故障前最后一次完整备份。
+
+```bash
+# 1. 在存活节点或备份服务器上，使用最近一次快照
+# 2. 在 3 台新机器上执行（或复用 1 台存活 + 2 台新机器）：
+systemctl stop etcd
+rm -rf /data/etcd/data/*
+
+/opt/etcd/bin/etcdutl snapshot restore /backup/etcd/etcd-20260314.db \
+  --name=etcd-01 \
+  --data-dir=/data/etcd/data \
+  --initial-cluster=etcd-01=http://192.168.1.101:2380,etcd-02=http://192.168.1.102:2380,etcd-03=http://192.168.1.103:2380 \
+  --initial-cluster-token=etcd-cluster-recovery \
+  --initial-advertise-peer-urls=http://192.168.1.101:2380
+
+chown -R etcd:etcd /data/etcd/data
+
+# 3. 修改 etcd 启动参数：--initial-cluster-state=existing
+# 4. 三节点同时启动
+systemctl start etcd
+```
+
+> ⚠️ **注意**：恢复后 `initial-cluster-token` 会变化，依赖该 token 的客户端（如 K8s）需重启。恢复会丢失快照之后的数据。
+
+---
+
+#### 故障五：数据损坏或误删后从快照恢复
+
+**现象**：数据目录损坏、误执行 `etcdctl del --prefix ""` 等导致数据丢失。
+
+**恢复思路**：
+
+1. **单节点数据损坏**：停止该节点，清空数据目录，从其他节点通过 `etcdctl snapshot save` 拉取最新快照，用 `etcdutl snapshot restore` 恢复后重启，以新成员身份加入（或复用原成员配置，`--initial-cluster-state=existing`）
+2. **全集群恢复**：按故障四执行，使用最近一次备份快照
+
+**备份恢复验证**（伪集群验证通过）：
+```bash
+# 备份
+ETCDCTL_API=3 etcdctl snapshot save /backup/etcd/etcd-$(date +%Y%m%d_%H%M%S).db --endpoints=http://127.0.0.1:2379
+
+# 恢复（每节点 --name、--initial-advertise-peer-urls 不同）
+etcdutl snapshot restore /backup/etcd/etcd-xxx.db --name=etcd-01 --data-dir=/data/etcd/data \
+  --initial-cluster=etcd-01=http://192.168.1.101:2380,etcd-02=http://192.168.1.102:2380,etcd-03=http://192.168.1.103:2380 \
+  --initial-cluster-token=etcd-cluster-prod --initial-advertise-peer-urls=http://192.168.1.101:2380
+```
+
+---
+
+#### 故障六：Leader 频繁切换
+
+**现象**：`etcd_server_leader_changes_seen_total` 在 1 小时内增加 > 3 次，客户端偶发超时。
+
+**原因**：网络抖动、磁盘 I/O 延迟高、CPU 负载过高导致心跳超时，触发重新选举。
+
+**排查步骤**：
+```bash
+# 查看 Leader 切换历史
+curl -s http://127.0.0.1:2379/metrics | grep etcd_server_leader_changes
+
+# 检查磁盘延迟
+curl -s http://127.0.0.1:2379/metrics | grep etcd_disk_backend_commit_duration
+```
+
+**解决方案**：
+- 检查网络质量，避免跨机房延迟过高
+- 确保使用 SSD，避免 HDD 或 NFS
+- 调大 `ETCD_ELECTION_TIMEOUT`（默认 1000ms，谨慎调整）
+- 降低集群负载，扩容节点或拆分业务
+
+---
+
+#### 故障七：磁盘空间不足
+
+**现象**：日志报 `no space left on device`，etcd 进程退出。
+
+**解决**：
+1. 扩容磁盘或清理其他文件
+2. 调小 `ETCD_AUTO_COMPACTION_RETENTION`（如从 3 改为 1，单位小时）
+3. 恢复磁盘空间后重启 etcd
+4. **预防**：对数据目录配置 Prometheus 磁盘使用率告警（> 80% 告警）
+
+---
+
+#### 故障八：成员误删
+
+**现象**：误执行 `etcdctl member remove <member_id>`，导致集群成员数减少。
+
+**恢复思路**：
+- 若删除的节点仍存活：用 `etcdctl member add` 重新添加，需提供 `--peer-urls`，新成员会获得新 ID
+- 若删除后集群仍满足多数派：可继续运行，补足新节点即可
+- 若删除后不足多数派：需从快照恢复（见故障四）
 
 ---
 
